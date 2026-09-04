@@ -299,11 +299,6 @@ renderer operations. Coordinate conversion belongs in the scientific I/O layer a
 
 Choose an open issue that matches your experience (and/or your interests).
 
-The starter already provides installation, data fetching, automatic coordinate
-detection, independent visibility, reset behavior, scene save/export, portable
-recipes, registration fixtures, tests, reference renders, and four-platform CI.
-You should treat any failures in those baseline behaviors as regressions and report them ASAP.
-
 ### `neuro`: anatomical presets and tract-palette design
 
 **Goal.** Make anatomically meaningful figures fast and consistent for users
@@ -346,9 +341,9 @@ scene/renderer/app modules, `scripts/generate_registration_demo.py`, and
 `tests/test_registration.py`.
 
 **Acceptance criteria.** Identity leaves coordinates unchanged; rigid mode
-adds no scale or shear; full affine follows the moving-RASMM-to-fixed-RASMM
-direction; known fixtures improve alignment within a documented tolerance; 
-cancel leaves the scene unchanged; QC images can be exported.
+performs rigid registration; full-affine mode performs affine registration in 
+the moving-RASMM-to-fixed-RASMM direction; cancelling an operation leaves the 
+scene unchanged; QC images can be exported.
 
 ### `rendering`: glass brain, depth peeling, lighting, and gradients
 
