@@ -1,5 +1,4 @@
 import gzip
-import io
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import product
@@ -7,7 +6,7 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
-from dipy.io.stateful_tractogram import Origin, Space
+from dipy.io.stateful_tractogram import Origin, Space, StatefulTractogram
 from dipy.io.streamline import load_tractogram
 from nibabel.affines import apply_affine
 from scipy.io import loadmat
@@ -475,7 +474,7 @@ def load_tinytrack(path: str | Path) -> tuple[np.ndarray, ...]:
     path = Path(path)
     opener = gzip.open if path.suffix.lower() == ".gz" else open
     with opener(path, "rb") as handle:
-        contents = loadmat(io.BytesIO(handle.read()))
+        contents = loadmat(handle)
 
     track = np.ascontiguousarray(contents["track"]).reshape(-1).view(np.uint8)
     voxel_to_mni = np.asarray(contents["trans_to_mni"], dtype=float).reshape(4, 4)
@@ -484,6 +483,8 @@ def load_tinytrack(path: str | Path) -> tuple[np.ndarray, ...]:
 
     while offset < track.size:
         byte_count = int(track[offset : offset + 4].view("<u4")[0])
+        if byte_count < 3 or byte_count % 3 or offset + 13 + byte_count > track.size:
+            raise ValueError(f"Malformed TinyTrack record at byte {offset} in {path.name}")
         first = track[offset + 4 : offset + 16].view("<i4").astype(np.int64)
         deltas = track[offset + 16 : offset + 13 + byte_count].view(np.int8).reshape(-1, 3)
         offset += 13 + byte_count
@@ -501,7 +502,7 @@ def _validate_tractogram_path(tractogram_path: str | Path) -> tuple[Path, str]:
 
     extension = tractogram_extension(path)
 
-    if extension.endswith(".gz") and extension not in TINYTRACK_EXTENSIONS:
+    if extension.endswith(".gz") and extension not in SUPPORTED_EXTENSIONS:
         raise ValueError(
             "Compressed tractograms require a dedicated adapter. "
             f"Decompress this file before loading: {path.name}"
@@ -567,11 +568,12 @@ def load_tract_layer(
     reference, reference_description = _resolve_reference(path, extension, reference_path)
 
     if extension in TINYTRACK_EXTENSIONS:
-        reference_image = nib.load(str(reference))
-        raw_streamlines = load_tinytrack(path)
-        affine = np.asarray(reference_image.affine, dtype=float)
-        dimensions = tuple(int(value) for value in reference_image.shape[:3])
-        voxel_sizes = tuple(float(value) for value in reference_image.header.get_zooms()[:3])
+        stateful = StatefulTractogram(
+            load_tinytrack(path),
+            str(reference),
+            Space.RASMM,
+            origin=Origin.NIFTI,
+        )
         detection_method = "embedded trans_to_mni"
     elif extension in SELF_DESCRIBING_SPATIAL_EXTENSIONS:
         stateful = load_tractogram(
@@ -594,15 +596,14 @@ def load_tract_layer(
         )
         detection_method = "automatic reference-image scoring"
 
-    if extension not in TINYTRACK_EXTENSIONS:
-        if stateful is False or stateful is None:
-            raise RuntimeError(f"DIPY could not load {path}")
+    if stateful is False or stateful is None:
+        raise RuntimeError(f"DIPY could not load {path}")
 
-        raw_streamlines = _extract_streamlines(stateful, path)
-        affine, dimensions, voxel_sizes, _voxel_order = stateful.space_attributes
-        affine = np.asarray(affine, dtype=float)
-        dimensions = tuple(int(value) for value in dimensions)
-        voxel_sizes = tuple(float(value) for value in voxel_sizes)
+    raw_streamlines = _extract_streamlines(stateful, path)
+    affine, dimensions, voxel_sizes, _voxel_order = stateful.space_attributes
+    affine = np.asarray(affine, dtype=float)
+    dimensions = tuple(int(value) for value in dimensions)
+    voxel_sizes = tuple(float(value) for value in voxel_sizes)
 
     if extension in SELF_DESCRIBING_SPATIAL_EXTENSIONS:
         source_space_name = "RASMM"

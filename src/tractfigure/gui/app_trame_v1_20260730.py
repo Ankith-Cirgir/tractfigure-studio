@@ -318,7 +318,6 @@ class TractFigureController:
         self.state.slice_opacity = self.scene.image.opacity
         self.state.mesh_present = self.scene.mesh is not None
         self.state.mesh_shader = self.scene.mesh.shader if self.scene.mesh else "phong"
-        self.state.mesh_shader_items = ["phong", "outline"]
         self.state.mesh_opacity = self.scene.mesh.opacity if self.scene.mesh else 0.25
         self.state.scene_background = self.scene.canvas.background
 
@@ -1569,7 +1568,7 @@ def build_ui(
                 v3.VSelect(
                     label="Brain mesh shader",
                     v_model=("mesh_shader", controller.state.mesh_shader),
-                    items=("mesh_shader_items", controller.state.mesh_shader_items),
+                    items=(["phong", "outline"],),
                     v_if="mesh_present",
                     hide_details=True,
                     density="compact",
@@ -1860,8 +1859,8 @@ def configure_cli() -> argparse.Namespace:
 
 def scene_from_cli(args: Any) -> SceneState:
     if args.recipe is not None:
-        if args.reference is not None or args.tractogram:
-            raise ValueError("--recipe cannot be combined with --reference or --tractogram")
+        if args.reference is not None or args.tractogram or args.mesh is not None:
+            raise ValueError("--recipe cannot be combined with --reference, --tractogram or --mesh")
 
         return load_recipe(args.recipe)
 
@@ -1874,7 +1873,7 @@ def scene_from_cli(args: Any) -> SceneState:
     return scene_from_inputs(
         args.reference,
         args.tractogram,
-        getattr(args, "mesh", None),
+        args.mesh,
     )
 
 

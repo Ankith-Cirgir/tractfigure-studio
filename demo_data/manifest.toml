@@ -18,4 +18,3 @@ contrast = "T1"
 url = "https://brain.labsolver.org/hcp_trk_atlas.html"
 license = "CC-BY-SA-4.0"
 space = "ICBM2009a"
-formats = ["tt.gz", "gii", "nii.gz"]

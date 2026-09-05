@@ -197,10 +197,11 @@ def test_renderer_loads_gifti_mesh_and_sets_opacity(tmp_path: Path) -> None:
         renderer.set_mesh_opacity(0.6)
         assert renderer.scene.mesh.opacity == pytest.approx(0.6)
         assert renderer.mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.6)
+        phong = renderer._capture_png(io.BytesIO(), 320, 240)
         renderer.set_mesh_shader("outline")
         assert renderer.mesh_actor.GetShaderProperty().GetNumberOfShaderReplacements() == 1
         if sys.platform != "win32":  # GPU-less Windows CI crashes in software GL here
-            renderer._capture_png(io.BytesIO(), 320, 240)
+            assert not np.array_equal(phong, renderer._capture_png(io.BytesIO(), 320, 240))
         renderer.set_mesh_shader("phong")
         assert renderer.mesh_actor.GetShaderProperty().GetNumberOfShaderReplacements() == 0
     finally:

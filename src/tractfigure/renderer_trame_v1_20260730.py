@@ -220,47 +220,34 @@ class SceneRenderer:
 
     def load_mesh(self, mesh_state: MeshLayerState) -> None:
         vertices, faces = nib.load(str(mesh_state.path)).agg_data(("pointset", "triangle"))
-        faces = np.asarray(faces, dtype=np.int64)
-        surface = pv.PolyData(
-            np.asarray(vertices, dtype=np.float32),
-            np.column_stack([np.full(len(faces), 3), faces]).reshape(-1),
-        )
         self.mesh_actor = self.plotter.add_mesh(
-            surface,
+            pv.PolyData.from_regular_faces(vertices, faces),
             color=mesh_state.color,
             opacity=mesh_state.opacity,
             smooth_shading=True,
             name="brain_mesh",
             reset_camera=False,
         )
-        self._apply_mesh_shader()
+        self._apply_mesh_shader(mesh_state.shader)
 
-    def _apply_mesh_shader(self) -> None:
-        scene = self._require_scene()
-        if scene.mesh is None or self.mesh_actor is None:
-            return
-
-        shader = self.mesh_actor.GetShaderProperty()
-        shader.ClearAllFragmentShaderReplacements()
-        if scene.mesh.shader == "outline":
-            shader.AddFragmentShaderReplacement("//VTK::Light::Impl", False, OUTLINE_SHADER, False)
+    def _apply_mesh_shader(self, shader: str) -> None:
+        shader_property = self.mesh_actor.GetShaderProperty()
+        shader_property.ClearAllFragmentShaderReplacements()
+        if shader == "outline":
+            shader_property.AddFragmentShaderReplacement(
+                "//VTK::Light::Impl", False, OUTLINE_SHADER, False
+            )
 
     def set_mesh_shader(self, shader: str) -> None:
-        scene = self._require_scene()
-        if scene.mesh is None:
-            return
-
-        scene.mesh.shader = shader
-        self._apply_mesh_shader()
+        mesh = self._require_scene().mesh
+        mesh.shader = shader
+        self._apply_mesh_shader(mesh.shader)
         self._refresh()
 
     def set_mesh_opacity(self, opacity: float) -> None:
-        scene = self._require_scene()
-        if scene.mesh is None or self.mesh_actor is None:
-            return
-
-        scene.mesh.opacity = opacity
-        self.mesh_actor.GetProperty().SetOpacity(scene.mesh.opacity)
+        mesh = self._require_scene().mesh
+        mesh.opacity = opacity
+        self.mesh_actor.GetProperty().SetOpacity(mesh.opacity)
         self._refresh()
 
     def load_reference(self, image_state: ImageLayerState) -> None:
@@ -765,8 +752,9 @@ class SceneRenderer:
         scene.image.axial_index = initial_image.axial_index
 
         if initial_scene.mesh is not None:
-            self.set_mesh_opacity(initial_scene.mesh.opacity)
-            self.set_mesh_shader(initial_scene.mesh.shader)
+            scene.mesh = initial_scene.mesh.model_copy(deep=True)
+            self.mesh_actor.GetProperty().SetOpacity(scene.mesh.opacity)
+            self._apply_mesh_shader(scene.mesh.shader)
 
         if indices_changed:
             self.load_reference(scene.image)

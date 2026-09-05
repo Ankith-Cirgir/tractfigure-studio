@@ -111,7 +111,7 @@ def test_automatic_lpsmm_detection(tmp_path: Path) -> None:
 def test_load_tinytrack_decodes_deltas_and_affine(tmp_path: Path) -> None:
     first = np.array([32, 64, 96], dtype="<i4")  # voxel (1, 2, 3) in 1/32 units
     deltas = np.array([[32, 0, 0], [0, -32, 0]], dtype=np.int8)
-    byte_count = np.array([12 + deltas.size - 9], dtype="<u4")  # JS convention: bytes/3 = points
+    byte_count = np.array([3 + deltas.size], dtype="<u4")  # 3 bytes per point incl. the first
     track = np.concatenate(
         [byte_count.view(np.uint8), first.view(np.uint8), deltas.reshape(-1).view(np.uint8)]
     )
