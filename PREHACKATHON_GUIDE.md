@@ -534,8 +534,8 @@ xvfb-run -a python scripts/render_reference_scenes.py
 
 ### Validate the DSI Studio TinyTrack and glass-brain demo
 
-`fetch_demo_data.py` also downloads a DSI Studio `.tt.gz` bundle, an MNI152 T1,
-and an MNI152 cortical surface (GIFTI) into `demo_data/cache/dsi_studio/`. The
+The repository ships a DSI Studio `.tt.gz` bundle, an MNI152 T1, and an MNI152
+cortical surface (GIFTI) in `demo_data/dsi/`; no download step is needed. The
 `.tt.gz` adapter lives in `src/tractfigure/io.py` (`load_tinytrack`); the
 surface is drawn as an optional `mesh` layer with a NiiVue-style `outline`
 shader.
@@ -552,7 +552,7 @@ radiation. Loading it against the MNI152 reference must report `embedded
 trans_to_mni`, no warnings, and every point inside the image:
 
 ```bash
-python -c "from tractfigure.io import load_tract_layer; i = load_tract_layer('demo_data/cache/dsi_studio/TR_S_R.tt.gz', 'demo_data/cache/dsi_studio/mni152.nii.gz').inspection; print(i.coordinate_detection, i.point_fraction_inside_reference, i.warnings)"
+python -c "from tractfigure.io import load_tract_layer; i = load_tract_layer('demo_data/dsi/TR_S_R.tt.gz', 'demo_data/dsi/mni152.nii.gz').inspection; print(i.coordinate_detection, i.point_fraction_inside_reference, i.warnings)"
 ```
 
 Visual check:
