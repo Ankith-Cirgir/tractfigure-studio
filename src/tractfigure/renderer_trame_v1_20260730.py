@@ -865,8 +865,6 @@ class SceneRenderer:
                 if enabled:
                     widget.EnabledOff()
 
-            self.plotter.render()
-
             image = self.plotter.screenshot(
                 filename=None,
                 return_img=True,

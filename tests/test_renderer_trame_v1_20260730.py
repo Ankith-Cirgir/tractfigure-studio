@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -198,7 +199,8 @@ def test_renderer_loads_gifti_mesh_and_sets_opacity(tmp_path: Path) -> None:
         assert renderer.mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.6)
         renderer.set_mesh_shader("outline")
         assert renderer.mesh_actor.GetShaderProperty().GetNumberOfShaderReplacements() == 1
-        renderer._capture_png(io.BytesIO(), 320, 240)
+        if sys.platform != "win32":  # GPU-less Windows CI crashes in software GL here
+            renderer._capture_png(io.BytesIO(), 320, 240)
         renderer.set_mesh_shader("phong")
         assert renderer.mesh_actor.GetShaderProperty().GetNumberOfShaderReplacements() == 0
     finally:

@@ -97,12 +97,5 @@
   },
   "mni2009a": {
     "t1": "demo_data/cache/mni_icbm152_2009a_t1.nii.gz"
-  },
-  "dsi_studio": {
-    "reference": "demo_data/cache/dsi_studio/mni152.nii.gz",
-    "mesh": "demo_data/cache/dsi_studio/mni152.gii",
-    "tractograms": [
-      "demo_data/cache/dsi_studio/TR_S_R.tt.gz"
-    ]
   }
 }
