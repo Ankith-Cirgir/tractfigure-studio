@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
+import urllib.request
 from pathlib import Path
 
 import nibabel as nib
@@ -13,6 +15,14 @@ INVENTORY_PATH = PROJECT_ROOT / "demo_data" / "data_inventory.json"
 
 HCP842_ANATOMICAL_BUNDLE_COUNT = 80
 HCP842_TRACTOGRAM_FILE_COUNT = 79
+
+DSI_STUDIO_ROOT = CACHE_ROOT / "dsi_studio"
+DSI_STUDIO_URL = "https://github.com/neurolabusc/tractfigure-studio/releases/download/data-v1/"
+DSI_STUDIO_FILES = {
+    "TR_S_R.tt.gz": "cbb99a44042e836f3069c6bf571a04d2f3364347eaedec4808d046d405d99cf3",
+    "mni152.nii.gz": "e33dcfd37ceec56efa5e419249fd2a778313371e56b65c8d217af80cefdd6821",
+    "mni152.gii": "a4ba5700e5109d8f6860cdb7762c61554d977e7ac5d70db917ff4372df85f97b",
+}
 
 os.environ["DIPY_HOME"] = str(CACHE_ROOT)
 
@@ -46,12 +56,28 @@ def resolve_bundle_paths(path_or_pattern: str | Path) -> list[Path]:
     return [path.resolve() for path in paths]
 
 
+def fetch_dsi_studio() -> dict[str, str]:
+    DSI_STUDIO_ROOT.mkdir(parents=True, exist_ok=True)
+    paths = {}
+
+    for name, expected in DSI_STUDIO_FILES.items():
+        path = DSI_STUDIO_ROOT / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            urllib.request.urlretrieve(DSI_STUDIO_URL + name, path)
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise RuntimeError(f"Checksum mismatch for {name}")
+        paths[name] = relative(path)
+
+    return paths
+
+
 def main() -> None:
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 
     fetch_file_formats()
     fetch_bundle_atlas_hcp842()
     fetch_mni_template()
+    dsi_paths = fetch_dsi_studio()
 
     format_bundles, format_reference = get_file_formats()
     hcp_whole_brain, hcp_bundle_pattern = get_bundle_atlas_hcp842(size=80)
@@ -84,6 +110,11 @@ def main() -> None:
         "mni2009a": {
             "t1": relative(mni_path),
         },
+        "dsi_studio": {
+            "reference": dsi_paths["mni152.nii.gz"],
+            "mesh": dsi_paths["mni152.gii"],
+            "tractograms": [dsi_paths["TR_S_R.tt.gz"]],
+        },
     }
 
     INVENTORY_PATH.write_text(
@@ -95,7 +126,8 @@ def main() -> None:
         "Demo data ready: "
         f"{len(format_bundles)} format examples, "
         f"{len(hcp_bundles)} HCP842 tractogram files representing "
-        f"{HCP842_ANATOMICAL_BUNDLE_COUNT} anatomical bundles, and MNI2009a T1"
+        f"{HCP842_ANATOMICAL_BUNDLE_COUNT} anatomical bundles, MNI2009a T1, "
+        "and DSI Studio TinyTrack example"
     )
 
 

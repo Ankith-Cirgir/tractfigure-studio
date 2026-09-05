@@ -427,6 +427,9 @@ DSI Studio `.tt.gz` adapter that converts coordinates into RASMM.
 and fixtures for nonlinear work; `src/tractfigure/io.py` and I/O tests for
 `.tt.gz`.
 
+**Status.** The `.tt.gz` adapter and a glass-brain mesh layer are implemented;
+see "Validate the DSI Studio TinyTrack and glass-brain demo" in section 13.
+
 ## 10. Develop within the existing architecture
 
 Before coding:
@@ -528,6 +531,47 @@ On headless Linux:
 ```bash
 xvfb-run -a python scripts/render_reference_scenes.py
 ```
+
+### Validate the DSI Studio TinyTrack and glass-brain demo
+
+`fetch_demo_data.py` also downloads a DSI Studio `.tt.gz` bundle, an MNI152 T1,
+and an MNI152 cortical surface (GIFTI) into `demo_data/cache/dsi_studio/`. The
+`.tt.gz` adapter lives in `src/tractfigure/io.py` (`load_tinytrack`); the
+surface is drawn as an optional `mesh` layer with a NiiVue-style `outline`
+shader.
+
+Automated checks:
+
+```bash
+python -m pytest tests/test_io.py -k tinytrack
+python -m pytest tests/test_renderer_trame_v1_20260730.py -k mesh
+```
+
+Coordinate check. The bundle is `TR_S_R`, the right superior thalamic
+radiation. Loading it against the MNI152 reference must report `embedded
+trans_to_mni`, no warnings, and every point inside the image:
+
+```bash
+python -c "from tractfigure.io import load_tract_layer; i = load_tract_layer('demo_data/cache/dsi_studio/TR_S_R.tt.gz', 'demo_data/cache/dsi_studio/mni152.nii.gz').inspection; print(i.coordinate_detection, i.point_fraction_inside_reference, i.warnings)"
+```
+
+Visual check:
+
+```bash
+python -m tractfigure.gui.app_trame_v1_20260730 \
+  --recipe examples/recipes/dsi_tinytrack.json --output-dir outputs
+```
+
+- Choose **Coronal A/P**. The bundle must sit in the right hemisphere (viewer's
+  left in the anterior view) and fan from thalamus to the superior cortex.
+- The **Brain mesh shader** and **Brain mesh opacity** controls appear only when
+  a recipe or `--mesh` supplies a surface. With `outline` at opacity 1 the
+  cortex renders as opaque silhouette bands with the tracts visible between
+  them and no translucency sorting artifacts. Switch to `phong` and lower the
+  opacity to compare against the conventional translucent glass brain.
+- Cross-check against NiiVue by loading the same three files there with the
+  `outline` mesh shader; the bundle location and silhouette pattern should
+  match.
 
 ## 14. Push and open a pull request
 

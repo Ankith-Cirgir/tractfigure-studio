@@ -18,6 +18,7 @@ from tractfigure.io import load_tract_layer
 from tractfigure.scene_state_v1_20260730 import (
     CameraState,
     ImageLayerState,
+    MeshLayerState,
     SceneState,
     TractLayerState,
 )
@@ -42,6 +43,17 @@ ANATOMICAL_VIEW_CONFIG = {
     ("axial", "superior"): ("view_xy", False),
     ("axial", "inferior"): ("view_xy", True),
 }
+
+
+# Port of NiiVue's meshFragOutline: keep only silhouette-facing fragments, so an
+# opaque draw reads as a glass brain with no translucency sorting artifacts.
+OUTLINE_SHADER = """
+  vec3 n = normalize(normalVCVSOutput);
+  if (abs(n.z) > 0.6) discard;
+  vec3 l = normalize(vec3(0.0, 10.0, 5.0));
+  float s = 0.25 * pow(max(dot(reflect(l, n), vec3(0.0, 0.0, 1.0)), 0.0), 10.0);
+  fragOutput0 = vec4(diffuseColor * (0.3 + 0.6 * max(dot(n, l), 0.0)) + s, opacity);
+"""
 
 
 def _safe_actor_name(prefix: str, identifier: str) -> str:
@@ -101,6 +113,7 @@ class SceneRenderer:
         ] = {}
         self.actors_by_id: dict[str, pv.Actor] = {}
         self.image_actors: dict[str, pv.Actor] = {}
+        self.mesh_actor: pv.Actor | None = None
 
     def _require_scene(self) -> SceneState:
         if self.scene is None:
@@ -122,6 +135,7 @@ class SceneRenderer:
         self.tube_meshes_by_key.clear()
         self.actors_by_id.clear()
         self.image_actors.clear()
+        self.mesh_actor = None
 
     def load_scene(self, scene: SceneState) -> SceneState:
         self.clear()
@@ -135,8 +149,12 @@ class SceneRenderer:
         )
         self.plotter.set_background(active_scene.canvas.background)
         self.plotter.enable_anti_aliasing("ssaa")
+        self.plotter.enable_lightkit()  # plotter.clear() removed the default lights
 
         self.load_reference(active_scene.image)
+
+        if active_scene.mesh is not None:
+            self.load_mesh(active_scene.mesh)
 
         for tract_state in active_scene.tracts:
             self.add_tract(tract_state)
@@ -200,6 +218,51 @@ class SceneRenderer:
 
         return bool(image_state.visible and getattr(image_state, visibility_field))
 
+    def load_mesh(self, mesh_state: MeshLayerState) -> None:
+        vertices, faces = nib.load(str(mesh_state.path)).agg_data(("pointset", "triangle"))
+        faces = np.asarray(faces, dtype=np.int64)
+        surface = pv.PolyData(
+            np.asarray(vertices, dtype=np.float32),
+            np.column_stack([np.full(len(faces), 3), faces]).reshape(-1),
+        )
+        self.mesh_actor = self.plotter.add_mesh(
+            surface,
+            color=mesh_state.color,
+            opacity=mesh_state.opacity,
+            smooth_shading=True,
+            name="brain_mesh",
+            reset_camera=False,
+        )
+        self._apply_mesh_shader()
+
+    def _apply_mesh_shader(self) -> None:
+        scene = self._require_scene()
+        if scene.mesh is None or self.mesh_actor is None:
+            return
+
+        shader = self.mesh_actor.GetShaderProperty()
+        shader.ClearAllFragmentShaderReplacements()
+        if scene.mesh.shader == "outline":
+            shader.AddFragmentShaderReplacement("//VTK::Light::Impl", False, OUTLINE_SHADER, False)
+
+    def set_mesh_shader(self, shader: str) -> None:
+        scene = self._require_scene()
+        if scene.mesh is None:
+            return
+
+        scene.mesh.shader = shader
+        self._apply_mesh_shader()
+        self._refresh()
+
+    def set_mesh_opacity(self, opacity: float) -> None:
+        scene = self._require_scene()
+        if scene.mesh is None or self.mesh_actor is None:
+            return
+
+        scene.mesh.opacity = opacity
+        self.mesh_actor.GetProperty().SetOpacity(scene.mesh.opacity)
+        self._refresh()
+
     def load_reference(self, image_state: ImageLayerState) -> None:
         self._remove_image_actors()
 
@@ -252,6 +315,7 @@ class SceneRenderer:
                 show_scalar_bar=False,
                 name=f"reference_{slice_name}",
                 reset_camera=False,
+                lighting=False,
             )
             actor.SetVisibility(
                 self._slice_actor_visible(
@@ -699,6 +763,10 @@ class SceneRenderer:
         scene.image.sagittal_index = initial_image.sagittal_index
         scene.image.coronal_index = initial_image.coronal_index
         scene.image.axial_index = initial_image.axial_index
+
+        if initial_scene.mesh is not None:
+            self.set_mesh_opacity(initial_scene.mesh.opacity)
+            self.set_mesh_shader(initial_scene.mesh.shader)
 
         if indices_changed:
             self.load_reference(scene.image)

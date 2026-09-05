@@ -4,9 +4,11 @@ import nibabel as nib
 import numpy as np
 import pytest
 from nibabel.affines import apply_affine
+from scipy.io import savemat
 
 from tractfigure.io import (
     detect_source_coordinates,
+    load_tinytrack,
     point_fraction_inside_reference,
     reference_world_bounds,
     source_to_rasmm_affine,
@@ -104,3 +106,23 @@ def test_automatic_lpsmm_detection(tmp_path: Path) -> None:
     assert detection.source_space == "lpsmm"
     assert detection.confidence in {"moderate", "high"}
     assert detection.candidate_scores[0][0].startswith("lpsmm/")
+
+
+def test_load_tinytrack_decodes_deltas_and_affine(tmp_path: Path) -> None:
+    first = np.array([32, 64, 96], dtype="<i4")  # voxel (1, 2, 3) in 1/32 units
+    deltas = np.array([[32, 0, 0], [0, -32, 0]], dtype=np.int8)
+    byte_count = np.array([12 + deltas.size - 9], dtype="<u4")  # JS convention: bytes/3 = points
+    track = np.concatenate(
+        [byte_count.view(np.uint8), first.view(np.uint8), deltas.reshape(-1).view(np.uint8)]
+    )
+    trans = np.array([-1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1], dtype=np.float32)
+    path = tmp_path / "t.tt"
+    savemat(
+        path,
+        {"track": track[:, None], "trans_to_mni": trans[None], "voxel_size": np.ones((1, 3))},
+        format="4",
+    )
+
+    (streamline,) = load_tinytrack(path)
+    expected = np.array([[9.0, 22.0, 33.0], [8.0, 22.0, 33.0], [8.0, 21.0, 33.0]])
+    np.testing.assert_allclose(streamline, expected)

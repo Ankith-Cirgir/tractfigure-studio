@@ -17,6 +17,7 @@ from tractfigure.renderer_trame_v1_20260730 import SceneRenderer
 from tractfigure.scene_state_v1_20260730 import (
     CanvasState,
     ImageLayerState,
+    MeshLayerState,
     SceneState,
     TractLayerState,
 )
@@ -165,5 +166,40 @@ def test_renderer_controls_camera_reset_and_output(
 
         assert not any(enabled_during_capture)
         assert [bool(widget.GetEnabled()) for widget, _enabled in axes_widgets] == enabled_before
+    finally:
+        renderer.close()
+
+
+def test_renderer_loads_gifti_mesh_and_sets_opacity(tmp_path: Path) -> None:
+    reference, _affine = make_reference(tmp_path)
+    vertices = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 0], [0, 0, 10]], dtype=np.float32)
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int32)
+    gifti = nib.gifti.GiftiImage()
+    gifti.add_gifti_data_array(nib.gifti.GiftiDataArray(vertices, intent="NIFTI_INTENT_POINTSET"))
+    gifti.add_gifti_data_array(nib.gifti.GiftiDataArray(faces, intent="NIFTI_INTENT_TRIANGLE"))
+    mesh_path = tmp_path / "brain.gii"
+    nib.save(gifti, mesh_path)
+
+    scene = make_scene(reference)
+    scene.mesh = MeshLayerState(path=mesh_path)
+    renderer = SceneRenderer(
+        pv.Plotter(off_screen=True, window_size=(320, 240)),
+        layer_loader=lambda path, reference_path=None, *, name=None: FakeLayer(
+            (np.array([[0, 0, 0], [5, 5, 5]], dtype=np.float32),)
+        ),
+    )
+
+    try:
+        renderer.load_scene(scene)
+        assert renderer.mesh_actor is not None
+        assert renderer.mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.25)
+        renderer.set_mesh_opacity(0.6)
+        assert renderer.scene.mesh.opacity == pytest.approx(0.6)
+        assert renderer.mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.6)
+        renderer.set_mesh_shader("outline")
+        assert renderer.mesh_actor.GetShaderProperty().GetNumberOfShaderReplacements() == 1
+        renderer._capture_png(io.BytesIO(), 320, 240)
+        renderer.set_mesh_shader("phong")
+        assert renderer.mesh_actor.GetShaderProperty().GetNumberOfShaderReplacements() == 0
     finally:
         renderer.close()
