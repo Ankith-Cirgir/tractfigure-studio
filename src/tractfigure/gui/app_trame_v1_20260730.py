@@ -22,6 +22,7 @@ from tractfigure.renderer_trame_v1_20260730 import SceneRenderer
 from tractfigure.scene_state_v1_20260730 import (
     CanvasState,
     ImageLayerState,
+    MeshLayerState,
     SceneState,
     TractLayerState,
 )
@@ -69,6 +70,7 @@ NUMERIC_CONTROL_CONFIG: dict[
     tuple[float, float | str, bool],
 ] = {
     "slice_opacity": (0.0, 1.0, False),
+    "mesh_opacity": (0.0, 1.0, False),
     "sagittal_index": (0.0, "sagittal_max", True),
     "coronal_index": (0.0, "coronal_max", True),
     "axial_index": (0.0, "axial_max", True),
@@ -203,6 +205,7 @@ def unique_layer_names(paths: list[Path]) -> list[str]:
 def scene_from_inputs(
     reference_path: Path,
     tractogram_paths: list[Path],
+    mesh_path: Path | None = None,
 ) -> SceneState:
     reference_path = reference_path.expanduser().resolve()
     tractogram_paths = [path.expanduser().resolve() for path in tractogram_paths]
@@ -238,6 +241,7 @@ def scene_from_inputs(
     return SceneState(
         image=ImageLayerState(path=reference_path),
         tracts=tracts,
+        mesh=None if mesh_path is None else MeshLayerState(path=mesh_path.expanduser().resolve()),
         active_layer_id=tracts[0].id,
         canvas=CanvasState(),
     )
@@ -256,6 +260,9 @@ def resolve_recipe_paths(
     for tract in resolved.tracts:
         if not tract.path.is_absolute():
             tract.path = (recipe_directory / tract.path).resolve()
+
+    if resolved.mesh is not None and not resolved.mesh.path.is_absolute():
+        resolved.mesh.path = (recipe_directory / resolved.mesh.path).resolve()
 
     return resolved
 
@@ -309,6 +316,9 @@ class TractFigureController:
 
         self.state.reference_visible = self.scene.image.visible
         self.state.slice_opacity = self.scene.image.opacity
+        self.state.mesh_present = self.scene.mesh is not None
+        self.state.mesh_shader = self.scene.mesh.shader if self.scene.mesh else "phong"
+        self.state.mesh_opacity = self.scene.mesh.opacity if self.scene.mesh else 0.25
         self.state.scene_background = self.scene.canvas.background
 
         for slice_name, field_name in SLICE_VISIBILITY_FIELDS.items():
@@ -363,6 +373,8 @@ class TractFigureController:
         self.callbacks.append(self.state.change("active_layer_id")(self._on_active_layer_changed))
         self.callbacks.append(self.state.change("reference_visible")(self._on_reference_visible))
         self.callbacks.append(self.state.change("slice_opacity")(self._on_slice_opacity))
+        self.callbacks.append(self.state.change("mesh_opacity")(self._on_mesh_opacity))
+        self.callbacks.append(self.state.change("mesh_shader")(self._on_mesh_shader))
         self.callbacks.append(self.state.change("scene_background")(self._on_scene_background))
 
         for slice_name in SLICE_VISIBILITY_FIELDS:
@@ -541,6 +553,9 @@ class TractFigureController:
         try:
             self.state.reference_visible = self.scene.image.visible
             self.state.slice_opacity = self.scene.image.opacity
+            if self.scene.mesh is not None:
+                self.state.mesh_opacity = self.scene.mesh.opacity
+                self.state.mesh_shader = self.scene.mesh.shader
             self.state.scene_background = self.scene.canvas.background
 
             for slice_name, field_name in SLICE_VISIBILITY_FIELDS.items():
@@ -863,6 +878,42 @@ class TractFigureController:
             return
 
         self.renderer.set_image_opacity(opacity)
+        self.update_view()
+
+    def _on_mesh_opacity(
+        self,
+        mesh_opacity: float,
+        **_kwargs: Any,
+    ) -> None:
+        if self._state_sync_in_progress or self.scene.mesh is None:
+            return
+
+        opacity = self._normalize_numeric_state(
+            key="mesh_opacity",
+            raw_value=mesh_opacity,
+            current_value=self.scene.mesh.opacity,
+            minimum=0.0,
+            maximum=1.0,
+        )
+
+        if opacity is None or abs(self.scene.mesh.opacity - opacity) < 1e-9:
+            return
+
+        self.renderer.set_mesh_opacity(opacity)
+        self.update_view()
+
+    def _on_mesh_shader(
+        self,
+        mesh_shader: str,
+        **_kwargs: Any,
+    ) -> None:
+        if self._state_sync_in_progress or self.scene.mesh is None:
+            return
+        if self.scene.mesh.shader == mesh_shader:
+            return
+
+        self.renderer.set_mesh_shader(mesh_shader)
+        self.state.status_message = f"Mesh shader changed to {mesh_shader}"
         self.update_view()
 
     def _on_scene_background(
@@ -1514,6 +1565,29 @@ def build_ui(
                     commit=ctrl.commit_slice_opacity_input,
                 )
 
+                v3.VSelect(
+                    label="Brain mesh shader",
+                    v_model=("mesh_shader", controller.state.mesh_shader),
+                    items=(["phong", "outline"],),
+                    v_if="mesh_present",
+                    hide_details=True,
+                    density="compact",
+                    variant="outlined",
+                    classes="mt-3",
+                )
+
+                numeric_slider(
+                    label="Brain mesh opacity",
+                    model="mesh_opacity",
+                    value=controller.state.mesh_opacity,
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.05,
+                    input_model="mesh_opacity_input",
+                    commit=ctrl.commit_mesh_opacity_input,
+                    v_if="mesh_present",
+                )
+
                 numeric_slider(
                     label="Sagittal",
                     model="sagittal_index",
@@ -1761,6 +1835,10 @@ def configure_cli() -> argparse.Namespace:
         default=[],
     )
     parser.add_argument(
+        "--mesh",
+        type=Path,
+    )
+    parser.add_argument(
         "--recipe",
         type=Path,
     )
@@ -1781,8 +1859,8 @@ def configure_cli() -> argparse.Namespace:
 
 def scene_from_cli(args: Any) -> SceneState:
     if args.recipe is not None:
-        if args.reference is not None or args.tractogram:
-            raise ValueError("--recipe cannot be combined with --reference or --tractogram")
+        if args.reference is not None or args.tractogram or args.mesh is not None:
+            raise ValueError("--recipe cannot be combined with --reference, --tractogram or --mesh")
 
         return load_recipe(args.recipe)
 
@@ -1795,6 +1873,7 @@ def scene_from_cli(args: Any) -> SceneState:
     return scene_from_inputs(
         args.reference,
         args.tractogram,
+        args.mesh,
     )
 
 

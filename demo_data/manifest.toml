@@ -13,3 +13,8 @@ space = "ICBM2009a"
 license = "MNI template license"
 space = "ICBM2009a"
 contrast = "T1"
+
+[dataset.dsi_studio]
+url = "https://brain.labsolver.org/hcp_trk_atlas.html"
+license = "CC-BY-SA-4.0"
+space = "ICBM2009a"

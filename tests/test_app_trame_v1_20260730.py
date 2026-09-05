@@ -133,7 +133,9 @@ def test_cli_recipe_and_color_helpers(tmp_path: Path) -> None:
     assert [tract.name for tract in scene.tracts] == ["bundle", "bundle (2)"]
     assert len({tract.id for tract in scene.tracts}) == 2
 
-    cli_scene = scene_from_cli(SimpleNamespace(recipe=None, reference=reference, tractogram=tracts))
+    cli_scene = scene_from_cli(
+        SimpleNamespace(recipe=None, reference=reference, tractogram=tracts, mesh=None)
+    )
     assert len(cli_scene.tracts) == 2
 
     recipe_path = tmp_path / "scene.json"

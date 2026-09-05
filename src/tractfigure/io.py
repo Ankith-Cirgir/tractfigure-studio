@@ -1,3 +1,4 @@
+import gzip
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import product
@@ -5,9 +6,10 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
-from dipy.io.stateful_tractogram import Origin, Space
+from dipy.io.stateful_tractogram import Origin, Space, StatefulTractogram
 from dipy.io.streamline import load_tractogram
 from nibabel.affines import apply_affine
+from scipy.io import loadmat
 from scipy.ndimage import distance_transform_edt
 
 SUPPORTED_EXTENSIONS = {
@@ -18,9 +20,12 @@ SUPPORTED_EXTENSIONS = {
     ".vtp",
     ".fib",
     ".dpy",
+    ".tt",
+    ".tt.gz",
 }
 
-SELF_DESCRIBING_SPATIAL_EXTENSIONS = {".trk", ".tck", ".trx"}
+SELF_DESCRIBING_SPATIAL_EXTENSIONS = {".trk", ".tck", ".trx", ".tt", ".tt.gz"}
+TINYTRACK_EXTENSIONS = {".tt", ".tt.gz"}
 
 SOURCE_SPACES = {
     "rasmm": Space.RASMM,
@@ -459,6 +464,36 @@ def _transform_streamlines(
     )
 
 
+def load_tinytrack(path: str | Path) -> tuple[np.ndarray, ...]:
+    """Decode DSI Studio TinyTrack (.tt/.tt.gz) into RASMM streamlines.
+
+    MAT v4 container; ``track`` holds per-streamline uint32 byte count, first point
+    as 3 x int32, then 3 x int8 deltas, all in 1/32 voxel units. ``trans_to_mni``
+    is a row-major 4x4 voxel-to-MNI-mm affine.
+    """
+    path = Path(path)
+    opener = gzip.open if path.suffix.lower() == ".gz" else open
+    with opener(path, "rb") as handle:
+        contents = loadmat(handle)
+
+    track = np.ascontiguousarray(contents["track"]).reshape(-1).view(np.uint8)
+    voxel_to_mni = np.asarray(contents["trans_to_mni"], dtype=float).reshape(4, 4)
+    streamlines = []
+    offset = 0
+
+    while offset < track.size:
+        byte_count = int(track[offset : offset + 4].view("<u4")[0])
+        if byte_count < 3 or byte_count % 3 or offset + 13 + byte_count > track.size:
+            raise ValueError(f"Malformed TinyTrack record at byte {offset} in {path.name}")
+        first = track[offset + 4 : offset + 16].view("<i4").astype(np.int64)
+        deltas = track[offset + 16 : offset + 13 + byte_count].view(np.int8).reshape(-1, 3)
+        offset += 13 + byte_count
+        voxels = np.vstack([first, first + np.cumsum(deltas, axis=0)]) / 32.0
+        streamlines.append(apply_affine(voxel_to_mni, voxels).astype(np.float32))
+
+    return tuple(streamlines)
+
+
 def _validate_tractogram_path(tractogram_path: str | Path) -> tuple[Path, str]:
     path = Path(tractogram_path).expanduser().resolve()
 
@@ -467,7 +502,7 @@ def _validate_tractogram_path(tractogram_path: str | Path) -> tuple[Path, str]:
 
     extension = tractogram_extension(path)
 
-    if extension.endswith(".gz"):
+    if extension.endswith(".gz") and extension not in SUPPORTED_EXTENSIONS:
         raise ValueError(
             "Compressed tractograms require a dedicated adapter. "
             f"Decompress this file before loading: {path.name}"
@@ -532,7 +567,15 @@ def load_tract_layer(
     path, extension = _validate_tractogram_path(tractogram_path)
     reference, reference_description = _resolve_reference(path, extension, reference_path)
 
-    if extension in SELF_DESCRIBING_SPATIAL_EXTENSIONS:
+    if extension in TINYTRACK_EXTENSIONS:
+        stateful = StatefulTractogram(
+            load_tinytrack(path),
+            str(reference),
+            Space.RASMM,
+            origin=Origin.NIFTI,
+        )
+        detection_method = "embedded trans_to_mni"
+    elif extension in SELF_DESCRIBING_SPATIAL_EXTENSIONS:
         stateful = load_tractogram(
             str(path),
             str(reference),

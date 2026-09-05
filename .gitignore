@@ -12,3 +12,6 @@ demo_data/cache/
 demo_data/registration/
 outputs/
 outputs-clean/
+
+.DS_Store
+CLAUDE.md

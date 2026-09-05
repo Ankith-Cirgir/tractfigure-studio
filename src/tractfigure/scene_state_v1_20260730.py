@@ -60,6 +60,22 @@ class ImageLayerState(BaseModel):
     axial_index: int | None = Field(default=None, ge=0)
 
 
+class MeshLayerState(BaseModel):
+    """Translucent cortical surface (GIFTI) drawn over the tracts as a glass brain."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+    )
+
+    path: Path
+    opacity: float = Field(default=0.25, ge=0.0, le=1.0)
+    color: str = "#D9D9D9"
+    shader: Literal["phong", "outline"] = "phong"
+
+    _validate_color = field_validator("color")(validate_hex_color)
+
+
 class CameraState(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -108,6 +124,7 @@ class SceneState(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     image: ImageLayerState
     tracts: list[TractLayerState]
+    mesh: MeshLayerState | None = None
     active_layer_id: str | None = None
     camera: CameraState | None = None
     canvas: CanvasState = Field(default_factory=CanvasState)
