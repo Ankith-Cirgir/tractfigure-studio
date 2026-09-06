@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from math import isfinite
 from pathlib import Path
 from typing import Any, Literal
 
@@ -62,6 +63,17 @@ class ImageLayerState(BaseModel):
     translation_mm: tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)
     scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+
+    @model_validator(mode="after")
+    def validate_transform(self) -> ImageLayerState:
+        values = self.translation_mm + self.rotation_deg + self.scale
+        if not all(isfinite(value) for value in values):
+            raise ValueError("Image transform values must be finite")
+
+        if any(value <= 0 for value in self.scale):
+            raise ValueError("Image scale values must be positive")
+
+        return self
 
 
 class LightingState(BaseModel):

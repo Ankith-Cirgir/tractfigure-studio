@@ -51,7 +51,7 @@
   },
   "mesh": {
     "path": "../../demo_data/dsi/mni152.gii",
-    "opacity": 0.0,
+    "opacity": 0.25,
     "color": "#D9D9D9",
     "shader": "phong"
   }
