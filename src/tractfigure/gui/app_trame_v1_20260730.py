@@ -19,6 +19,13 @@ from trame.ui.vuetify3 import SinglePageWithDrawerLayout
 from trame.widgets import html
 from trame.widgets import vuetify3 as v3
 
+from tractfigure.gui.file_dialogs_v1_20260906 import (
+    choose_image,
+    choose_tractogram_files,
+    choose_tractogram_folder,
+    expand_tractogram_entries,
+    validate_reference_image,
+)
 from tractfigure.morphology_niimath_v1_20260905 import (
     NiimathError,
     SurfaceMorpher,
@@ -226,6 +233,18 @@ def unique_layer_names(paths: list[Path]) -> list[str]:
     return names
 
 
+def next_unique_layer_name(path: Path, used_names: set[str]) -> str:
+    base = path.stem
+    if base not in used_names:
+        return base
+
+    suffix = 2
+    while f"{base} ({suffix})" in used_names:
+        suffix += 1
+
+    return f"{base} ({suffix})"
+
+
 def scene_from_inputs(
     reference_path: Path,
     tractogram_paths: list[Path],
@@ -322,9 +341,6 @@ class TractFigureController:
         )
         self._surface_morph_in_progress = False
 
-        self.visibility_keys: dict[str, str] = {}
-        self.color_keys: dict[str, str] = {}
-        self.link_keys: dict[str, str] = {}
         self.callbacks: list[Any] = []
         self.numeric_commit_actions: dict[str, Any] = {}
         self._state_sync_in_progress = False
@@ -371,32 +387,6 @@ class TractFigureController:
         self.state.all_tracts_visible = all(tract.visible for tract in self.scene.tracts)
         self.state.layer_search_query = ""
         self.state.linked_layer_ids = []
-
-        for index, tract in enumerate(self.scene.tracts):
-            visibility_key = f"layer_visible_{index}"
-            color_key = f"layer_color_{index}"
-            link_key = f"layer_linked_{index}"
-
-            self.visibility_keys[tract.id] = visibility_key
-            self.color_keys[tract.id] = color_key
-            self.link_keys[tract.id] = link_key
-
-            setattr(
-                self.state,
-                visibility_key,
-                tract.visible,
-            )
-            setattr(
-                self.state,
-                color_key,
-                tract.color,
-            )
-            setattr(
-                self.state,
-                link_key,
-                False,
-            )
-
         self._refresh_layer_items()
 
         if self.scene.active_layer_id is None and self.scene.tracts:
@@ -405,6 +395,7 @@ class TractFigureController:
         self.state.active_layer_id = self.scene.active_layer_id
         self.state.status_message = "Scene loaded"
         self.state.export_path = ""
+        self.state.tract_manager_open = False
 
         self._set_surface_offset(0)
 
@@ -459,22 +450,6 @@ class TractFigureController:
         ):
             self.callbacks.append(self.state.change(key)(callback))
 
-        for tract in self.scene.tracts:
-            key = self.visibility_keys[tract.id]
-            callback = self._make_visibility_callback(
-                tract.id,
-                key,
-            )
-            self.callbacks.append(self.state.change(key)(callback))
-
-        for tract in self.scene.tracts:
-            key = self.link_keys[tract.id]
-            callback = self._make_link_callback(
-                tract.id,
-                key,
-            )
-            self.callbacks.append(self.state.change(key)(callback))
-
     def _register_controller_actions(self) -> None:
         self.ctrl.reset_camera = self.reset_camera
         self.ctrl.show_all_layers = self.show_all_layers
@@ -489,6 +464,14 @@ class TractFigureController:
         self.ctrl.export_png = self.export_png
         self.ctrl.erode_surface = self.erode_surface
         self.ctrl.diffuse_surface = self.diffuse_surface
+        self.ctrl.change_image = self.change_image
+        self.ctrl.open_tract_manager = self.open_tract_manager
+        self.ctrl.close_tract_manager = self.close_tract_manager
+        self.ctrl.add_tract_files = self.add_tract_files
+        self.ctrl.add_tract_folder = self.add_tract_folder
+        self.ctrl.remove_tract = self.remove_tract
+        self.ctrl.toggle_layer_visibility = self.toggle_layer_visibility
+        self.ctrl.toggle_layer_link = self.toggle_layer_link
 
         for model in NUMERIC_CONTROL_CONFIG:
             callback = self._make_numeric_commit_callback(model)
@@ -496,55 +479,34 @@ class TractFigureController:
             self.numeric_commit_actions[model] = callback
             setattr(self.ctrl, action_name, callback)
 
-    def _make_visibility_callback(
-        self,
-        layer_id: str,
-        state_key: str,
-    ):
-        def callback(**kwargs: Any) -> None:
-            if self._state_sync_in_progress:
-                return
-
-            value = bool(kwargs.get(state_key))
+    def toggle_layer_visibility(self, layer_id: str) -> None:
+        try:
             tract = self.scene.tract_by_id(layer_id)
+        except KeyError:
+            self.state.status_message = f"Unknown tract layer: {layer_id}"
+            return
 
-            if tract.visible == value:
-                return
+        self.renderer.set_tract_visible(layer_id, not tract.visible)
+        self._propagate_linked_visibility(layer_id, tract.visible)
+        self.state.all_tracts_visible = all(item.visible for item in self.scene.tracts)
+        self._refresh_layer_items()
+        self.update_view()
 
-            self.renderer.set_tract_visible(
-                layer_id,
-                value,
-            )
-            self._propagate_linked_visibility(layer_id, value)
+    def toggle_layer_link(self, layer_id: str) -> None:
+        try:
+            self.scene.tract_by_id(layer_id)
+        except KeyError:
+            self.state.status_message = f"Unknown tract layer: {layer_id}"
+            return
 
-            self.state.all_tracts_visible = all(item.visible for item in self.scene.tracts)
-            self._refresh_layer_items()
-            self.update_view()
+        linked_ids = list(self.state.linked_layer_ids or [])
+        if layer_id in linked_ids:
+            linked_ids.remove(layer_id)
+        else:
+            linked_ids.append(layer_id)
 
-        return callback
-
-    def _make_link_callback(
-        self,
-        layer_id: str,
-        state_key: str,
-    ):
-        def callback(**kwargs: Any) -> None:
-            if self._state_sync_in_progress:
-                return
-
-            linked = bool(kwargs.get(state_key))
-            linked_ids = list(self.state.linked_layer_ids or [])
-
-            if linked and layer_id not in linked_ids:
-                linked_ids.append(layer_id)
-            elif not linked and layer_id in linked_ids:
-                linked_ids.remove(layer_id)
-            else:
-                return
-
-            self.state.linked_layer_ids = linked_ids
-
-        return callback
+        self.state.linked_layer_ids = linked_ids
+        self._refresh_layer_items()
 
     def _propagate_linked_visibility(
         self,
@@ -552,7 +514,6 @@ class TractFigureController:
         value: bool,
     ) -> None:
         linked_ids = self.state.linked_layer_ids or []
-
         if source_layer_id not in linked_ids:
             return
 
@@ -565,15 +526,8 @@ class TractFigureController:
             except KeyError:
                 continue
 
-            if other_tract.visible == value:
-                continue
-
-            self.renderer.set_tract_visible(other_id, value)
-            setattr(
-                self.state,
-                self.visibility_keys[other_id],
-                value,
-            )
+            if other_tract.visible != value:
+                self.renderer.set_tract_visible(other_id, value)
 
     def _propagate_linked_appearance(
         self,
@@ -582,7 +536,6 @@ class TractFigureController:
         opacity: float,
     ) -> None:
         linked_ids = self.state.linked_layer_ids or []
-
         if source_layer_id not in linked_ids:
             return
 
@@ -599,11 +552,163 @@ class TractFigureController:
                 continue
 
             self.renderer.set_tract_appearance(other_id, color, opacity)
-            setattr(
-                self.state,
-                self.color_keys[other_id],
-                other_tract.color,
+
+    def open_tract_manager(self) -> None:
+        self.state.tract_manager_open = True
+
+    def close_tract_manager(self) -> None:
+        self.state.tract_manager_open = False
+
+    def change_image(self) -> None:
+        selected = choose_image(self.scene.image.path)
+        if selected is None:
+            return
+
+        try:
+            image_path, shape = validate_reference_image(selected)
+        except Exception as error:
+            self.state.status_message = f"Image unchanged: {error}"
+            return
+
+        previous = self.scene.image.model_copy(deep=True)
+        candidate = previous.model_copy(
+            update={
+                "path": image_path,
+                "sagittal_index": shape[0] // 2,
+                "coronal_index": shape[1] // 2,
+                "axial_index": shape[2] // 2,
+                "translation_mm": (0.0, 0.0, 0.0),
+                "rotation_deg": (0.0, 0.0, 0.0),
+                "scale": (1.0, 1.0, 1.0),
+            }
+        )
+
+        self.scene.image = candidate
+        try:
+            self.renderer.set_slice_indices(
+                candidate.sagittal_index,
+                candidate.coronal_index,
+                candidate.axial_index,
             )
+        except Exception as error:
+            self.scene.image = previous
+            try:
+                self.renderer.load_reference(previous)
+            except Exception as rollback_error:
+                self.state.status_message = (
+                    f"Image change failed: {error}; rollback failed: {rollback_error}"
+                )
+            else:
+                self._synchronize_state_from_scene()
+                self.state.status_message = f"Image unchanged: {error}"
+                self.update_view()
+            return
+
+        self.surface_morpher = SurfaceMorpher(
+            self.scene.image.path,
+            self.output_directory / "surface_cache",
+        )
+        self._set_surface_offset(0)
+        self.initial_scene = self.scene.model_copy(deep=True)
+        self._synchronize_state_from_scene()
+        self.state.status_message = f"Reference image changed: {image_path.name}"
+        self.update_view()
+
+    def add_tract_files(self) -> None:
+        current_path = self.scene.tracts[-1].path if self.scene.tracts else self.scene.image.path
+        selected = choose_tractogram_files(current_path)
+        if selected:
+            self.add_tract_entries(selected)
+
+    def add_tract_folder(self) -> None:
+        current_path = self.scene.tracts[-1].path if self.scene.tracts else self.scene.image.path
+        selected = choose_tractogram_folder(current_path)
+        if selected is not None:
+            self.add_tract_entries([selected])
+
+    def add_tract_entries(self, entries: list[str | Path]) -> None:
+        try:
+            paths = expand_tractogram_entries(entries)
+        except Exception as error:
+            self.state.status_message = f"No tracts added: {error}"
+            return
+
+        existing_paths = {
+            Path(tract.path).expanduser().resolve() for tract in self.scene.tracts
+        }
+        used_names = {tract.name for tract in self.scene.tracts}
+        added: list[TractLayerState] = []
+        skipped = 0
+        failures: list[str] = []
+
+        for path in paths:
+            if path in existing_paths:
+                skipped += 1
+                continue
+
+            name = next_unique_layer_name(path, used_names)
+            tract = TractLayerState(
+                id=str(uuid4()),
+                name=name,
+                path=path,
+                color=DEFAULT_COLORS[len(self.scene.tracts) % len(DEFAULT_COLORS)],
+            )
+
+            try:
+                self.renderer.add_tract(tract)
+            except Exception as error:
+                failures.append(f"{path.name}: {error}")
+                continue
+
+            self.scene.tracts.append(tract)
+            existing_paths.add(path)
+            used_names.add(name)
+            added.append(tract)
+
+        if added:
+            if self.scene.active_layer_id is None:
+                self.scene.active_layer_id = added[0].id
+            self.initial_scene = self.scene.model_copy(deep=True)
+            self._synchronize_state_from_scene()
+            self.update_view()
+
+        parts = [f"Added {len(added)} tract{'s' if len(added) != 1 else ''}"]
+        if skipped:
+            parts.append(f"skipped {skipped} duplicate{'s' if skipped != 1 else ''}")
+        if failures:
+            parts.append(f"failed: {'; '.join(failures)}")
+        self.state.status_message = "; ".join(parts)
+
+    def remove_tract(self, layer_id: str) -> None:
+        try:
+            tract = self.scene.tract_by_id(layer_id)
+        except KeyError:
+            self.state.status_message = f"Unknown tract layer: {layer_id}"
+            return
+
+        name = tract.name
+        previous_active = self.scene.active_layer_id
+        if previous_active == layer_id:
+            self.scene.active_layer_id = next(
+                (item.id for item in self.scene.tracts if item.id != layer_id),
+                None,
+            )
+
+        try:
+            self.renderer.remove_tract(layer_id)
+        except Exception as error:
+            if any(item.id == previous_active for item in self.scene.tracts):
+                self.scene.active_layer_id = previous_active
+            self.state.status_message = f"Tract unchanged: {error}"
+            return
+
+        self.state.linked_layer_ids = [
+            item_id for item_id in (self.state.linked_layer_ids or []) if item_id != layer_id
+        ]
+        self.initial_scene = self.scene.model_copy(deep=True)
+        self._synchronize_state_from_scene()
+        self.state.status_message = f"Removed tract: {name}"
+        self.update_view()
 
     def _active_tract(self) -> TractLayerState | None:
         layer_id = self.state.active_layer_id
@@ -644,8 +749,11 @@ class TractFigureController:
             {
                 "id": tract.id,
                 "name": tract.name,
+                "path": str(tract.path),
                 "color": tract.color,
                 "visible": tract.visible,
+                "linked": tract.id in (self.state.linked_layer_ids or []),
+                "visibility_icon": "mdi-eye" if tract.visible else "mdi-eye-off",
                 "warning_count": len(
                     tract.coordinate_report.get(
                         "warnings",
@@ -710,20 +818,19 @@ class TractFigureController:
             self.state.sagittal_index = self.scene.image.sagittal_index
             self.state.coronal_index = self.scene.image.coronal_index
             self.state.axial_index = self.scene.image.axial_index
+            image_shape = self.renderer.image_shape
+            if image_shape is not None:
+                self.state.sagittal_max = image_shape[0] - 1
+                self.state.coronal_max = image_shape[1] - 1
+                self.state.axial_max = image_shape[2] - 1
             self._sync_image_transform_state()
             self.state.all_tracts_visible = all(tract.visible for tract in self.scene.tracts)
-
-            for tract in self.scene.tracts:
-                setattr(
-                    self.state,
-                    self.visibility_keys[tract.id],
-                    tract.visible,
-                )
-                setattr(
-                    self.state,
-                    self.color_keys[tract.id],
-                    tract.color,
-                )
+            valid_layer_ids = {tract.id for tract in self.scene.tracts}
+            self.state.linked_layer_ids = [
+                layer_id
+                for layer_id in (self.state.linked_layer_ids or [])
+                if layer_id in valid_layer_ids
+            ]
 
             self.state.active_layer_id = self.scene.active_layer_id
             self._refresh_layer_items()
@@ -952,14 +1059,6 @@ class TractFigureController:
             return
 
         self.renderer.set_all_tracts_visible(target)
-
-        for tract in self.scene.tracts:
-            setattr(
-                self.state,
-                self.visibility_keys[tract.id],
-                target,
-            )
-
         self._refresh_layer_items()
         self.update_view()
 
@@ -1243,11 +1342,6 @@ class TractFigureController:
             tract.id,
             color,
             target_opacity,
-        )
-        setattr(
-            self.state,
-            self.color_keys[tract.id],
-            tract.color,
         )
         self._propagate_linked_appearance(tract.id, color, target_opacity)
         self._refresh_layer_items()
@@ -1722,6 +1816,18 @@ def build_ui(
         layout.drawer.width = 420
 
         with layout.toolbar:
+            v3.VBtn(
+                "Change image",
+                prepend_icon="mdi-image-edit",
+                click=ctrl.change_image,
+                size="small",
+            )
+            v3.VBtn(
+                "Change tracts",
+                prepend_icon="mdi-folder-multiple-image",
+                click=ctrl.open_tract_manager,
+                size="small",
+            )
             v3.VSpacer()
             v3.VBtn(
                 "Reset all settings",
@@ -1952,64 +2058,55 @@ def build_ui(
                     style="max-height: 400px; overflow-y: auto;",
                     classes="mb-2",
                 ):
-                    for tract in controller.scene.tracts:
-                        tract_name_js = tract.name.replace("\\", "\\\\").replace("'", "\\'")
-                        color_key = controller.color_keys[tract.id]
-
-                        with v3.VCard(
-                            variant="outlined",
-                            classes="mb-1",
-                            v_show=(
-                                f"!layer_search_query || '{tract_name_js}'.toLowerCase()"
-                                ".includes(layer_search_query.toLowerCase())"
-                            ),
+                    with v3.VCard(
+                        v_for="item in layer_items",
+                        key="item.id",
+                        variant="outlined",
+                        classes="mb-1",
+                        v_show=(
+                            "!layer_search_query || item.name.toLowerCase()"
+                            ".includes(layer_search_query.toLowerCase())"
+                        ),
+                    ):
+                        with v3.VRow(
+                            classes="ma-0 pa-1 align-center",
+                            no_gutters=True,
                         ):
-                            with v3.VRow(
-                                classes="ma-0 pa-1 align-center",
-                                no_gutters=True,
-                            ):
-                                with v3.VCol(cols="auto", classes="pa-0 pr-1"):
-                                    v3.VCheckbox(
-                                        v_model=(
-                                            controller.link_keys[tract.id],
-                                            False,
-                                        ),
-                                        hide_details=True,
-                                        density="compact",
-                                    )
+                            with v3.VCol(cols="auto", classes="pa-0 pr-1"):
+                                v3.VCheckbox(
+                                    model_value=("item.linked",),
+                                    hide_details=True,
+                                    density="compact",
+                                    click=(ctrl.toggle_layer_link, "[item.id]"),
+                                )
 
-                                with v3.VCol(cols="auto", classes="pa-0"):
-                                    v3.VSwitch(
-                                        v_model=(
-                                            controller.visibility_keys[tract.id],
-                                            tract.visible,
-                                        ),
-                                        color=(
-                                            color_key,
-                                            tract.color,
-                                        ),
-                                        hide_details=True,
-                                        density="compact",
-                                    )
+                            with v3.VCol(cols="auto", classes="pa-0"):
+                                v3.VSwitch(
+                                    model_value=("item.visible",),
+                                    color=("item.color",),
+                                    hide_details=True,
+                                    density="compact",
+                                    click=(ctrl.toggle_layer_visibility, "[item.id]"),
+                                )
 
-                                with v3.VCol(classes="pa-0 pl-2", style="min-width: 0;"):
-                                    html.Span(
-                                        tract.name,
-                                        classes="text-caption text-truncate",
-                                        style=(
-                                            "display: block; white-space: nowrap; "
-                                            "overflow: hidden; text-overflow: ellipsis;"
-                                        ),
-                                    )
+                            with v3.VCol(classes="pa-0 pl-2", style="min-width: 0;"):
+                                html.Span(
+                                    "{{ item.name }}",
+                                    classes="text-caption text-truncate",
+                                    style=(
+                                        "display: block; white-space: nowrap; "
+                                        "overflow: hidden; text-overflow: ellipsis;"
+                                    ),
+                                )
 
-                                with v3.VCol(cols="auto", classes="pa-0 pl-2"):
-                                    html.Div(
-                                        v_bind_style=(
-                                            f"'background-color: ' + {color_key} + "
-                                            "'; width: 14px; height: 14px; border-radius: 3px; "
-                                            "border: 1px solid rgba(0,0,0,0.2);'"
-                                        ),
-                                    )
+                            with v3.VCol(cols="auto", classes="pa-0 pl-2"):
+                                html.Div(
+                                    v_bind_style=(
+                                        "'background-color: ' + item.color + "
+                                        "'; width: 14px; height: 14px; border-radius: 3px; "
+                                        "border: 1px solid rgba(0,0,0,0.2);'"
+                                    ),
+                                )
 
                 v3.VSelect(
                     label="Active tract",
@@ -2160,6 +2257,44 @@ def build_ui(
                 )
 
         with layout.content:
+            with v3.VDialog(
+                v_model=("tract_manager_open", False),
+                max_width=720,
+            ):
+                with v3.VCard():
+                    v3.VCardTitle("Change tracts")
+                    v3.VCardSubtitle(
+                        "New files are interpreted in the active reference image space."
+                    )
+                    with v3.VCardText():
+                        with v3.VList(density="compact"):
+                            with v3.VListItem(
+                                v_for="item in layer_items",
+                                key="item.id",
+                            ):
+                                v3.VListItemTitle("{{ item.name }}")
+                                v3.VListItemSubtitle("{{ item.path }}")
+                                v3.VBtn(
+                                    icon="mdi-delete-outline",
+                                    variant="text",
+                                    color="error",
+                                    size="small",
+                                    click=(ctrl.remove_tract, "[item.id]"),
+                                )
+                    with v3.VCardActions():
+                        v3.VBtn(
+                            "Add files",
+                            prepend_icon="mdi-file-plus-outline",
+                            click=ctrl.add_tract_files,
+                        )
+                        v3.VBtn(
+                            "Add folder",
+                            prepend_icon="mdi-folder-plus-outline",
+                            click=ctrl.add_tract_folder,
+                        )
+                        v3.VSpacer()
+                        v3.VBtn("Close", click=ctrl.close_tract_manager)
+
             with v3.VContainer(
                 fluid=True,
                 classes="pa-0 fill-height",
