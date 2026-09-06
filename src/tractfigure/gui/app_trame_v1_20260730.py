@@ -16,6 +16,7 @@ from pyvista.trame.ui.vuetify3 import checkbox as pv_checkbox
 from pyvista.trame.ui.vuetify3 import divider as pv_divider
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageWithDrawerLayout
+from trame.widgets import html
 from trame.widgets import vuetify3 as v3
 
 from tractfigure.renderer_trame_v1_20260730 import SceneRenderer
@@ -1576,26 +1577,58 @@ def build_ui(
                     density="compact",
                 )
 
-                for tract in controller.scene.tracts:
-                    tract_name_js = tract.name.replace("\\", "\\\\").replace("'", "\\'")
+                with v3.VSheet(
+                    style="max-height: 400px; overflow-y: auto;",
+                    classes="mb-2",
+                ):
+                    for tract in controller.scene.tracts:
+                        tract_name_js = tract.name.replace("\\", "\\\\").replace("'", "\\'")
+                        color_key = controller.color_keys[tract.id]
 
-                    v3.VSwitch(
-                        label=tract.name,
-                        v_model=(
-                            controller.visibility_keys[tract.id],
-                            tract.visible,
-                        ),
-                        color=(
-                            controller.color_keys[tract.id],
-                            tract.color,
-                        ),
-                        hide_details=True,
-                        density="compact",
-                        v_show=(
-                            f"!layer_search_query || '{tract_name_js}'.toLowerCase()"
-                            ".includes(layer_search_query.toLowerCase())"
-                        ),
-                    )
+                        with v3.VCard(
+                            variant="outlined",
+                            classes="mb-1",
+                            v_show=(
+                                f"!layer_search_query || '{tract_name_js}'.toLowerCase()"
+                                ".includes(layer_search_query.toLowerCase())"
+                            ),
+                        ):
+                            with v3.VRow(
+                                classes="ma-0 pa-1 align-center",
+                                no_gutters=True,
+                            ):
+                                with v3.VCol(cols="auto", classes="pa-0"):
+                                    v3.VSwitch(
+                                        v_model=(
+                                            controller.visibility_keys[tract.id],
+                                            tract.visible,
+                                        ),
+                                        color=(
+                                            color_key,
+                                            tract.color,
+                                        ),
+                                        hide_details=True,
+                                        density="compact",
+                                    )
+
+                                with v3.VCol(classes="pa-0 pl-2", style="min-width: 0;"):
+                                    html.Span(
+                                        tract.name,
+                                        classes="text-caption text-truncate",
+                                        style=(
+                                            "display: block; white-space: nowrap; "
+                                            "overflow: hidden; text-overflow: ellipsis;"
+                                        ),
+                                    )
+
+                                with v3.VCol(cols="auto", classes="pa-0 pl-2"):
+                                    html.Div(
+                                        v_bind_style=(
+                                            f"'background-color: ' + {color_key} + "
+                                            "'; width: 14px; height: 14px; border-radius: 3px; "
+                                            "border: 1px solid rgba(0,0,0,0.2);'"
+                                        ),
+                                    )
 
                 v3.VSelect(
                     label="Active tract",
