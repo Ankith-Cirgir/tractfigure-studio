@@ -539,6 +539,21 @@ wheels = [
 ]
 
 [[package]]
+name = "niimath"
+version = "1.0.20260720"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/9c/4af92be8300fd8ae9d8458bacc6e372ddc4905fee7142ef4040baa15896e/niimath-1.0.20260720.tar.gz", hash = "sha256:a919bba2e8622f98090e1a6b050d505183987cef9507b0ee5f79635aa07e0155", size = 639103, upload-time = "2026-07-20T12:50:17.224Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/04/b33c1e3fe046582296d2db28a0302e7cdf1e1cf90a2c94a85e20c546dc7b/niimath-1.0.20260720-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:1399015683e1d2990e568cf285afc4150df40002493d105148d3660aba33d523", size = 915018, upload-time = "2026-07-20T12:49:21.004Z" },
+    { url = "https://files.pythonhosted.org/packages/88/20/767e3f953b0deb3d2d86ddf4a0585ccb6bd9295019bbcda064594e8a4bf6/niimath-1.0.20260720-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:75ac655dcc9153b44e5262f7c54712e5be89e5c80a718f428a88113218f237d0", size = 772419, upload-time = "2026-07-20T12:49:22.479Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/18/749d29ee5ddc75203a7ce8b59f8a182e15d4c3f118a4dafb72b9bf59aba1/niimath-1.0.20260720-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:69f71d751fcab3f441b575beca5f22559f6670b4920e7fcb27370a4154723372", size = 1076259, upload-time = "2026-07-20T12:49:24.365Z" },
+    { url = "https://files.pythonhosted.org/packages/43/05/29ac9a5e571bfeaaf7518128ee6867e90d98beecbc34125174e3384456cb/niimath-1.0.20260720-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e3fc755b9a2960f0fd8a6f1c882dacc4fbe33c275686f35e16e2eea61be76891", size = 1125632, upload-time = "2026-07-20T12:49:25.947Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/2c/b9a4c816c0997163fa62880270606f2ddbdacd644da4d1c62284b34dbedf/niimath-1.0.20260720-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c92f359c58c1bdbce99a3c671c843ddd7cbe0bb9769f730df4dff57353d1a29d", size = 1079555, upload-time = "2026-07-20T12:49:27.665Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/3c/f60904f237f34cda634a32a4ef1843ef6330b1591c7b0bf9c2c048d9858b/niimath-1.0.20260720-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:2c57140abcc5c527dafbc1945ffc1bca454e2c203ad520bf10e24254efd9a3f6", size = 1124394, upload-time = "2026-07-20T12:49:29.53Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/09/3bb9e513421d3a7ef8e58b33eb6e323166994b0d6ea0673c9acb12b36e49/niimath-1.0.20260720-cp312-cp312-win_amd64.whl", hash = "sha256:5a33921b1312a963d2e2a553133746dc46b308f78a429e8447ba2eeba4672139", size = 831750, upload-time = "2026-07-20T12:49:31.147Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -937,6 +952,7 @@ dev = [
 ]
 viz = [
     { name = "matplotlib" },
+    { name = "niimath" },
     { name = "pillow" },
     { name = "pyvista" },
     { name = "trame" },
@@ -951,6 +967,7 @@ requires-dist = [
     { name = "fury", specifier = ">=0.12,<0.14" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.9,<4" },
     { name = "nibabel", specifier = ">=5.2,<6" },
+    { name = "niimath", marker = "extra == 'viz'", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pillow", marker = "extra == 'viz'", specifier = ">=10,<13" },
     { name = "pydantic", specifier = ">=2.8,<3" },

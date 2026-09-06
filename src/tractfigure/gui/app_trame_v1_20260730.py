@@ -18,6 +18,11 @@ from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageWithDrawerLayout
 from trame.widgets import vuetify3 as v3
 
+from tractfigure.morphology_niimath_v1_20260905 import (
+    NiimathError,
+    SurfaceMorpher,
+    describe_offset,
+)
 from tractfigure.renderer_trame_v1_20260730 import SceneRenderer
 from tractfigure.scene_state_v1_20260730 import (
     CanvasState,
@@ -48,6 +53,9 @@ ANATOMICAL_PRIMARY_SIDES = {
     "coronal": "anterior",
     "axial": "superior",
 }
+
+SURFACE_MORPH_STEP_MM = 1
+SURFACE_MORPH_LIMIT_MM = 10
 
 ANATOMICAL_OPPOSITE_SIDES = {
     "left": "right",
@@ -292,6 +300,12 @@ class TractFigureController:
         self.output_directory = output_directory.resolve()
         self.view: Any | None = None
 
+        self.surface_morpher = SurfaceMorpher(
+            self.scene.image.path,
+            self.output_directory / "surface_cache",
+        )
+        self._surface_morph_in_progress = False
+
         self.visibility_keys: dict[str, str] = {}
         self.color_keys: dict[str, str] = {}
         self.callbacks: list[Any] = []
@@ -365,6 +379,8 @@ class TractFigureController:
         self.state.status_message = "Scene loaded"
         self.state.export_path = ""
 
+        self._set_surface_offset(0)
+
         self._populate_active_controls()
         self._synchronize_numeric_inputs()
 
@@ -431,6 +447,8 @@ class TractFigureController:
         self.ctrl.view_axial = self.view_axial
         self.ctrl.save_scene = self.save_scene
         self.ctrl.export_png = self.export_png
+        self.ctrl.erode_surface = self.erode_surface
+        self.ctrl.diffuse_surface = self.diffuse_surface
 
         for model in NUMERIC_CONTROL_CONFIG:
             callback = self._make_numeric_commit_callback(model)
@@ -553,6 +571,7 @@ class TractFigureController:
         try:
             self.state.reference_visible = self.scene.image.visible
             self.state.slice_opacity = self.scene.image.opacity
+            self.state.mesh_present = self.scene.mesh is not None
             if self.scene.mesh is not None:
                 self.state.mesh_opacity = self.scene.mesh.opacity
                 self.state.mesh_shader = self.scene.mesh.shader
@@ -916,6 +935,50 @@ class TractFigureController:
         self.state.status_message = f"Mesh shader changed to {mesh_shader}"
         self.update_view()
 
+    def _set_surface_offset(self, millimeters: int) -> None:
+        self.state.surface_offset_mm = int(millimeters)
+        self.state.surface_offset_label = f"Brain surface: {describe_offset(millimeters)}"
+
+    def _apply_surface_offset(self, delta_millimeters: int) -> None:
+        """Regenerate the glass brain at the accumulated erode/diffuse offset."""
+
+        if self._surface_morph_in_progress:
+            return
+
+        target = int(self.state.surface_offset_mm) + int(delta_millimeters)
+
+        if abs(target) > SURFACE_MORPH_LIMIT_MM:
+            self.state.status_message = (
+                f"Brain surface offset is limited to ±{SURFACE_MORPH_LIMIT_MM} mm"
+            )
+            return
+
+        self._surface_morph_in_progress = True
+
+        try:
+            mesh_path = self.surface_morpher.mesh_for_offset(target)
+        except NiimathError as error:
+            self.state.status_message = str(error)
+            return
+        finally:
+            self._surface_morph_in_progress = False
+
+        mesh_state = self.renderer.set_mesh_surface(mesh_path)
+
+        self._set_surface_offset(target)
+        self.state.mesh_present = True
+        self._assign_state_without_callback("mesh_opacity", mesh_state.opacity)
+        self._assign_state_without_callback("mesh_shader", mesh_state.shader)
+        self._synchronize_numeric_input("mesh_opacity")
+        self.state.status_message = f"Brain surface {describe_offset(target)}"
+        self.update_view()
+
+    def erode_surface(self) -> None:
+        self._apply_surface_offset(SURFACE_MORPH_STEP_MM)
+
+    def diffuse_surface(self) -> None:
+        self._apply_surface_offset(-SURFACE_MORPH_STEP_MM)
+
     def _on_scene_background(
         self,
         scene_background: str,
@@ -1253,6 +1316,7 @@ class TractFigureController:
         self.scene = self.renderer.restore_scene_settings(self.initial_scene)
         self._last_anatomical_plane = None
         self._anatomical_side.clear()
+        self._set_surface_offset(0)
         self._synchronize_state_from_scene()
         self.update_view()
         self._synchronize_camera_to_view()
@@ -1563,6 +1627,40 @@ def build_ui(
                     step=0.05,
                     input_model="slice_opacity_input",
                     commit=ctrl.commit_slice_opacity_input,
+                )
+
+                with v3.VRow(classes="ma-0 mt-3 align-center"):
+                    with v3.VCol(
+                        cols=6,
+                        classes="pa-0 pr-1",
+                    ):
+                        v3.VBtn(
+                            "+1mm Erode",
+                            prepend_icon="mdi-arrow-collapse-all",
+                            click=ctrl.erode_surface,
+                            loading=("trame__busy", False),
+                            disabled=("trame__busy", False),
+                            block=True,
+                            size="small",
+                        )
+
+                    with v3.VCol(
+                        cols=6,
+                        classes="pa-0 pl-1",
+                    ):
+                        v3.VBtn(
+                            "-1mm Diffuse",
+                            prepend_icon="mdi-arrow-expand-all",
+                            click=ctrl.diffuse_surface,
+                            loading=("trame__busy", False),
+                            disabled=("trame__busy", False),
+                            block=True,
+                            size="small",
+                        )
+
+                v3.VCardSubtitle(
+                    "{{ surface_offset_label }}",
+                    classes="pa-0 mt-1 text-caption",
                 )
 
                 v3.VSelect(
