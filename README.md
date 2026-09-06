@@ -68,3 +68,17 @@ of the reference volume, so revisiting an offset is instant.
 
 Set `TRACTFIGURE_NIIMATH` to use a niimath executable that is not installed
 beside the interpreter or on `PATH`.
+
+## Manual registration demo
+
+Translate, rotate and scale the reference image against fixed tracts and glass
+brain with the "Manual registration" sliders:
+
+```bash
+python -m tractfigure.gui.app_trame_v1_20260730 \
+  --recipe examples/recipes/manual_register.json \
+  --output-dir outputs
+```
+
+The nine parameters are saved with the scene. Validation steps:
+`PREHACKATHON_GUIDE.md`, section 13, "Validate the manual registration demo".

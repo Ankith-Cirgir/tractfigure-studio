@@ -573,6 +573,41 @@ python -m tractfigure.gui.app_trame_v1_20260730 \
   `outline` mesh shader; the bundle location and silhouette pattern should
   match.
 
+### Validate the manual registration demo
+
+`examples/recipes/manual_register.json` shows the DSI Studio bundle and glass
+brain over the MNI152 T1 with the "Manual registration" sliders enabled. The
+sliders translate (mm), rotate (deg, Euler XYZ) and scale the reference image
+about its centre while the tracts and mesh stay fixed, so a deliberately
+misaligned image can be dialled back into place by eye. The resulting matrix
+maps moving (native) RASMM to fixed (displayed) RASMM, matching the
+registration contract, and the nine parameters are stored in the saved scene
+under `image.translation_mm`, `image.rotation_deg` and `image.scale`.
+
+Automated check (the matrix is identity by default and pivots on the centre):
+
+```bash
+python -m pytest tests/test_renderer_trame_v1_20260730.py -k image_transform
+```
+
+Visual check:
+
+```bash
+python -m tractfigure.gui.app_trame_v1_20260730 \
+  --recipe examples/recipes/manual_register.json --output-dir outputs
+```
+
+- Set **Translate (mm) X** to 30: the slices shift toward the subject's right
+  while the red bundle and grey cortex do not move.
+- Set **Rotate (deg) Z** to 25: the slices turn about the vertical axis
+  through the image centre, so the centre point stays put.
+- Set **Scale Y** to 1.3: the slices stretch anterior-posterior from the centre.
+- **Reset all settings** returns every slider to identity and the slices to
+  their original position. **Save scene** writes the parameters to the recipe.
+- Only the reference image is transformed; tracts loaded against that image
+  are not re-registered. Use `src/tractfigure/registration.py` to apply the
+  same matrix to streamlines when that is needed.
+
 ## 14. Push and open a pull request
 
 Push the issue branch:

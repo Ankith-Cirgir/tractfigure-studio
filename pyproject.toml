@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 viz = [
     "matplotlib>=3.9,<4",
-    "niimath>=1.0",
+    "niimath>=1.0.20260720",
     "pillow>=10,<13",
     "pyvista>=0.47,<0.49",
     "trame>=3.10,<4",
