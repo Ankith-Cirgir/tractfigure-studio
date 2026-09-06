@@ -62,9 +62,9 @@ Each press moves a signed millimeter counter by one and re-renders; positive
 offsets erode, negative offsets dilate, and the range is clamped to ±10 mm. Both
 morphology operators binarize at a threshold, so the threshold is pinned to the
 isosurface niimath extracts the unmodified volume at — a threshold below it
-would shave background voxels without moving the visible surface. That isolevel
-is probed once, and every generated surface is cached under
-`<output-dir>/surface_cache/`, so revisiting an offset is instant.
+would shave background voxels without moving the visible surface. Generated
+surfaces are cached under `<output-dir>/surface_cache/`, keyed by the contents
+of the reference volume, so revisiting an offset is instant.
 
 Set `TRACTFIGURE_NIIMATH` to use a niimath executable that is not installed
 beside the interpreter or on `PATH`.

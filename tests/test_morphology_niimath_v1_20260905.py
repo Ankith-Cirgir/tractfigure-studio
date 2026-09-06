@@ -65,7 +65,7 @@ def test_erode_and_dilate_pipelines_reuse_the_probed_isolevel(tmp_path: Path) ->
 
     eroded = morpher.mesh_for_offset(2)
     assert eroded.is_file()
-    assert eroded.name == "erode_2mm.gii"
+    assert eroded.name.endswith("_erode_2mm.gii")
 
     # The first non-zero offset probes the unmodified surface for its isolevel.
     probe, erode = runner.calls
@@ -82,7 +82,7 @@ def test_erode_and_dilate_pipelines_reuse_the_probed_isolevel(tmp_path: Path) ->
     ]
 
     diffused = morpher.mesh_for_offset(-1)
-    assert diffused.name == "dilate_1mm.gii"
+    assert diffused.name.endswith("_dilate_1mm.gii")
     assert runner.calls[-1][1:-1] == [
         "-dilate",
         "3.41159",
@@ -105,14 +105,25 @@ def test_generated_surfaces_are_cached_on_disk(tmp_path: Path) -> None:
     assert morpher.mesh_for_offset(1) == first
     assert len(runner.calls) == call_count
 
-    # A fresh morpher recovers the isolevel from the cache instead of re-probing.
+    # A later session serves the same offset from disk without running niimath.
     reopened = SurfaceMorpher(
         morpher.image_path,
         morpher.cache_directory,
         runner=runner,
     )
-    assert reopened.isosurface_level() == pytest.approx(3.41159)
+    assert reopened.mesh_for_offset(1) == first
     assert len(runner.calls) == call_count
+
+
+def test_a_replaced_reference_volume_misses_the_cache(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    morpher = make_morpher(tmp_path, runner)
+    original = morpher.mesh_for_offset(0)
+
+    morpher.image_path.write_bytes(b"a different reference volume")
+
+    assert morpher.mesh_for_offset(0) != original
+    assert len(runner.calls) == 2
 
 
 def test_missing_output_is_reported(tmp_path: Path) -> None:

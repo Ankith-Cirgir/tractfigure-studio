@@ -18,9 +18,9 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from hashlib import sha1
 from pathlib import Path
-from typing import Any
 
 NIIMATH_ENV_VAR = "TRACTFIGURE_NIIMATH"
 NIIMATH_TIMEOUT_SECONDS = 600
@@ -28,8 +28,6 @@ NIIMATH_TIMEOUT_SECONDS = 600
 # niimath reports the resolved isosurface twice: "isolevel=3.41159" in the
 # option banner and "intensity range 0..15.4, isolevel 3.41159" in the log.
 ISOLEVEL_PATTERN = re.compile(r"isolevel[=\s]\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
-
-VOLUME_SUFFIXES = (".gz", ".nii", ".hdr", ".img")
 
 
 class NiimathError(RuntimeError):
@@ -75,17 +73,9 @@ def describe_offset(millimeters: float) -> str:
     return "unmodified"
 
 
-def _volume_stem(path: Path) -> str:
-    stem = path.name
-
-    for suffix in VOLUME_SUFFIXES:
-        if stem.lower().endswith(suffix):
-            stem = stem[: -len(suffix)]
-
-    return stem or "volume"
-
-
 def _source_digest(path: Path) -> str:
+    """Identify one revision of one volume, so a swapped reference misses the cache."""
+
     status = path.stat()
     fingerprint = f"{path}|{status.st_size}|{status.st_mtime_ns}"
     return sha1(
@@ -102,34 +92,26 @@ class SurfaceMorpher:
         image_path: str | Path,
         cache_directory: str | Path,
         *,
-        executable: str | Path | None = None,
-        runner: Any | None = None,
+        runner: Callable[[list[str]], str] | None = None,
     ) -> None:
         self.image_path = Path(image_path).expanduser().resolve()
         self.cache_directory = Path(cache_directory).expanduser().resolve()
 
-        self._executable = None if executable is None else Path(executable)
         self._runner = self._run_niimath if runner is None else runner
         self._isolevel: float | None = None
 
-    def _resolve_executable(self) -> Path:
-        if self._executable is None:
-            self._executable = find_niimath()
+    def _run_niimath(self, arguments: list[str]) -> str:
+        executable = find_niimath()
 
-        if self._executable is None:
+        if executable is None:
             raise NiimathError(
                 "niimath was not found; install it with 'uv pip install niimath' "
                 f"or point {NIIMATH_ENV_VAR} at the executable"
             )
 
-        return self._executable
-
-    def _run_niimath(self, arguments: list[str]) -> str:
-        command = [str(self._resolve_executable()), *arguments]
-
         try:
             completed = subprocess.run(
-                command,
+                [str(executable), *arguments],
                 capture_output=True,
                 text=True,
                 timeout=NIIMATH_TIMEOUT_SECONDS,
@@ -149,44 +131,12 @@ class SurfaceMorpher:
 
         return f"{completed.stdout}\n{completed.stderr}"
 
-    def _cache_directory(self) -> Path:
-        directory_name = f"{_volume_stem(self.image_path)}-{_source_digest(self.image_path)}"
-        return self.cache_directory / directory_name
-
     def _output_path(self, millimeters: float) -> Path:
-        return self._cache_directory() / f"{offset_tag(millimeters)}.gii"
-
-    def _isolevel_path(self) -> Path:
-        return self._cache_directory() / "isolevel.txt"
-
-    def _recorded_isolevel(self) -> float | None:
-        recorded = self._isolevel_path()
-
-        if not recorded.is_file():
-            return None
-
-        try:
-            return float(recorded.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            return None
-
-    def _record_isolevel(self, output: str) -> None:
-        match = ISOLEVEL_PATTERN.search(output)
-
-        if match is None:
-            return
-
-        self._isolevel = float(match.group(1))
-        self._isolevel_path().write_text(
-            f"{self._isolevel:.10g}\n",
-            encoding="utf-8",
-        )
+        digest = _source_digest(self.image_path)
+        return self.cache_directory / f"{digest}_{offset_tag(millimeters)}.gii"
 
     def isosurface_level(self) -> float:
         """Isovalue niimath extracts the unmodified surface at."""
-
-        if self._isolevel is None:
-            self._isolevel = self._recorded_isolevel()
 
         if self._isolevel is None:
             self._generate(0.0)
@@ -230,7 +180,10 @@ class SurfaceMorpher:
         output = self._runner(arguments)
 
         if not millimeters:
-            self._record_isolevel(output)
+            match = ISOLEVEL_PATTERN.search(output)
+
+            if match is not None:
+                self._isolevel = float(match.group(1))
 
         if not output_path.is_file():
             raise NiimathError(f"niimath did not write the surface: {output_path.name}")
