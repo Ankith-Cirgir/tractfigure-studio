@@ -327,6 +327,7 @@ class TractFigureController:
         self.state.axial_max = image_shape[2] - 1
 
         self.state.all_tracts_visible = all(tract.visible for tract in self.scene.tracts)
+        self.state.layer_search_query = ""
 
         for index, tract in enumerate(self.scene.tracts):
             visibility_key = f"layer_visible_{index}"
@@ -1550,6 +1551,20 @@ def build_ui(
                 v3.VDivider(classes="my-3")
                 v3.VCardTitle("Tract layers")
 
+                v3.VTextField(
+                    label="Search layers",
+                    v_model=(
+                        "layer_search_query",
+                        controller.state.layer_search_query,
+                    ),
+                    prepend_inner_icon="mdi-magnify",
+                    clearable=True,
+                    hide_details=True,
+                    density="compact",
+                    variant="outlined",
+                    classes="mb-2",
+                )
+
                 v3.VSwitch(
                     label="All tracts",
                     v_model=(
@@ -1562,6 +1577,8 @@ def build_ui(
                 )
 
                 for tract in controller.scene.tracts:
+                    tract_name_js = tract.name.replace("\\", "\\\\").replace("'", "\\'")
+
                     v3.VSwitch(
                         label=tract.name,
                         v_model=(
@@ -1574,6 +1591,10 @@ def build_ui(
                         ),
                         hide_details=True,
                         density="compact",
+                        v_show=(
+                            f"!layer_search_query || '{tract_name_js}'.toLowerCase()"
+                            ".includes(layer_search_query.toLowerCase())"
+                        ),
                     )
 
                 v3.VSelect(
