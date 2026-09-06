@@ -26,6 +26,7 @@ SUPPORTED_EXTENSIONS = {
 
 SELF_DESCRIBING_SPATIAL_EXTENSIONS = {".trk", ".tck", ".trx", ".tt", ".tt.gz"}
 TINYTRACK_EXTENSIONS = {".tt", ".tt.gz"}
+HEADER_REFERENCE_EXTENSIONS = {".trk", ".trx"}
 
 SOURCE_SPACES = {
     "rasmm": Space.RASMM,
@@ -520,7 +521,7 @@ def _resolve_reference(
     extension: str,
     reference_path: str | Path | None,
 ) -> tuple[str | Path, str]:
-    if reference_path is None:
+    if extension in HEADER_REFERENCE_EXTENSIONS:
         if extension in {".trk", ".trx"}:
             return "same", f"embedded geometry from {tractogram_path.name}"
 
@@ -576,8 +577,12 @@ def load_tract_layer(
         )
         detection_method = "embedded trans_to_mni"
     elif extension in SELF_DESCRIBING_SPATIAL_EXTENSIONS:
+        # .trk and .trx carry their own space attributes, and DIPY refuses to load
+        # them against a reference whose affine, dimensions or voxel sizes differ.
+        load_reference = "same" if extension in HEADER_REFERENCE_EXTENSIONS else str(reference)
         stateful = load_tractogram(
             str(path),
+            load_reference,
             str(reference),
             to_space=Space.RASMM,
             to_origin=Origin.NIFTI,
@@ -604,6 +609,15 @@ def load_tract_layer(
     affine = np.asarray(affine, dtype=float)
     dimensions = tuple(int(value) for value in dimensions)
     voxel_sizes = tuple(float(value) for value in voxel_sizes)
+
+
+    if extension in HEADER_REFERENCE_EXTENSIONS and isinstance(reference, Path):
+        # The bundle was loaded against its own header, so report the quality-control
+        # geometry against the reference image the caller actually supplied.
+        reference_image = nib.load(str(reference))
+        affine = np.asarray(reference_image.affine, dtype=float)
+        dimensions = tuple(int(value) for value in reference_image.shape[:3])
+        voxel_sizes = tuple(float(value) for value in reference_image.header.get_zooms()[:3])
 
     if extension in SELF_DESCRIBING_SPATIAL_EXTENSIONS:
         source_space_name = "RASMM"
