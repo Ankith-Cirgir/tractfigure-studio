@@ -74,3 +74,21 @@ def test_scene_rejects_unknown_active_layer() -> None:
                 "active_layer_id": "missing",
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("translation_mm", (0.0, float("nan"), 0.0), "finite"),
+        ("rotation_deg", (0.0, 0.0, float("inf")), "finite"),
+        ("scale", (1.0, 0.0, 1.0), "positive"),
+        ("scale", (1.0, -1.0, 1.0), "positive"),
+    ],
+)
+def test_image_rejects_invalid_transform_values(
+    field: str,
+    value: tuple[float, float, float],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ImageLayerState(path=Path("reference.nii.gz"), **{field: value})

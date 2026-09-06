@@ -5,8 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import nibabel as nib
+import numpy as np
 from PIL import Image
 
+import tractfigure.gui.app_trame_v1_20260730 as app_module
 from tractfigure.gui.app_trame_v1_20260730 import (
     SURFACE_MORPH_LIMIT_MM,
     TractFigureController,
@@ -48,6 +51,9 @@ class FakeRenderer:
         self.scene = scene
         self.image_shape = (8, 9, 10)
         self.view_calls: list[tuple[str, str]] = []
+        self.added_tracts: list[str] = []
+        self.removed_tracts: list[str] = []
+        self.reference_loads: list[Path] = []
 
     def _require_scene(self) -> SceneState:
         return self.scene
@@ -58,6 +64,27 @@ class FakeRenderer:
     def set_all_tracts_visible(self, visible: bool) -> None:
         for tract in self.scene.tracts:
             tract.visible = bool(visible)
+
+    def add_tract(self, tract: TractLayerState) -> None:
+        self.added_tracts.append(tract.id)
+
+    def remove_tract(self, layer_id: str) -> None:
+        self.scene.tract_by_id(layer_id)
+        self.removed_tracts.append(layer_id)
+        self.scene.tracts = [tract for tract in self.scene.tracts if tract.id != layer_id]
+        if self.scene.active_layer_id == layer_id:
+            self.scene.active_layer_id = self.scene.tracts[0].id if self.scene.tracts else None
+
+    def load_reference(self, image: ImageLayerState) -> None:
+        self.reference_loads.append(Path(image.path))
+        loaded = nib.load(str(image.path))
+        self.image_shape = tuple(int(value) for value in loaded.shape)
+
+    def set_slice_indices(self, sagittal: int, coronal: int, axial: int) -> None:
+        self.scene.image.sagittal_index = int(sagittal)
+        self.scene.image.coronal_index = int(coronal)
+        self.scene.image.axial_index = int(axial)
+        self.load_reference(self.scene.image)
 
     def set_tract_appearance(self, layer_id: str, color: str, opacity: float) -> None:
         tract = self.scene.tract_by_id(layer_id)
@@ -133,6 +160,10 @@ def make_scene(reference: Path, tracts: list[Path]) -> SceneState:
     )
 
 
+def write_nifti(path: Path, shape: tuple[int, int, int]) -> None:
+    nib.save(nib.Nifti1Image(np.zeros(shape, dtype=np.float32), np.eye(4)), path)
+
+
 def test_cli_recipe_and_color_helpers(tmp_path: Path) -> None:
     reference = tmp_path / "reference.nii.gz"
     tracts = [tmp_path / "bundle.trk", tmp_path / "bundle.tck"]
@@ -201,9 +232,7 @@ def test_controller_independent_controls_resets_and_outputs(tmp_path: Path) -> N
         tmp_path / "outputs",
     )
 
-    key = controller.visibility_keys["tract-0"]
-    callback = controller._make_visibility_callback("tract-0", key)
-    callback(**{key: False})
+    controller.toggle_layer_visibility("tract-0")
     assert not controller.scene.tract_by_id("tract-0").visible
     assert controller.scene.tract_by_id("tract-1").visible
 
@@ -244,6 +273,148 @@ def test_controller_independent_controls_resets_and_outputs(tmp_path: Path) -> N
 
     with Image.open(io.BytesIO(controller.download_png())) as image:
         assert image.size == (1400, 1000)
+
+
+def test_dynamic_linked_layers_propagate_visibility_and_appearance(
+    tmp_path: Path,
+) -> None:
+    scene = make_scene(
+        tmp_path / "reference.nii.gz",
+        [tmp_path / "a.trk", tmp_path / "b.trk"],
+    )
+    renderer = FakeRenderer(scene)
+    controller = TractFigureController(FakeServer(), renderer, tmp_path / "outputs")
+    first, second = controller.scene.tracts
+
+    controller.toggle_layer_link(first.id)
+    controller.toggle_layer_link(second.id)
+    controller.toggle_layer_visibility(first.id)
+
+    assert not first.visible
+    assert not second.visible
+    assert all(item["linked"] for item in controller.state.layer_items)
+
+    controller.state.active_layer_id = first.id
+    controller._on_active_color(active_color="#AABBCC80")
+
+    assert second.color == "#AABBCC"
+    assert abs(second.opacity - 128 / 255) < 1e-9
+
+    controller.remove_tract(first.id)
+    assert controller.state.linked_layer_ids == [second.id]
+    assert controller.state.layer_items[0]["linked"]
+
+
+def test_change_image_reloads_reference_and_resets_manual_transform(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    old_reference = tmp_path / "old.nii.gz"
+    new_reference = tmp_path / "new.nii.gz"
+    write_nifti(old_reference, (8, 9, 10))
+    write_nifti(new_reference, (10, 12, 14))
+
+    scene = make_scene(old_reference, [tmp_path / "a.trk"])
+    scene.image.translation_mm = (1.0, 2.0, 3.0)
+    scene.image.rotation_deg = (4.0, 5.0, 6.0)
+    scene.image.scale = (1.1, 1.2, 1.3)
+    renderer = FakeRenderer(scene)
+    controller = TractFigureController(FakeServer(), renderer, tmp_path / "outputs")
+    tract_ids = [tract.id for tract in scene.tracts]
+
+    monkeypatch.setattr(app_module, "choose_image", lambda _current: new_reference)
+    controller.change_image()
+
+    assert controller.scene.image.path == new_reference
+    assert (
+        controller.scene.image.sagittal_index,
+        controller.scene.image.coronal_index,
+        controller.scene.image.axial_index,
+    ) == (5, 6, 7)
+    assert controller.scene.image.translation_mm == (0.0, 0.0, 0.0)
+    assert controller.scene.image.rotation_deg == (0.0, 0.0, 0.0)
+    assert controller.scene.image.scale == (1.0, 1.0, 1.0)
+    assert [tract.id for tract in controller.scene.tracts] == tract_ids
+    maxima = (
+        controller.state.sagittal_max,
+        controller.state.coronal_max,
+        controller.state.axial_max,
+    )
+    assert maxima == (
+        9,
+        11,
+        13,
+    )
+    assert controller.initial_scene.image.path == new_reference
+
+
+def test_change_image_rolls_back_when_renderer_rejects_it(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    old_reference = tmp_path / "old.nii.gz"
+    new_reference = tmp_path / "new.nii.gz"
+    write_nifti(old_reference, (8, 9, 10))
+    write_nifti(new_reference, (10, 12, 14))
+
+    scene = make_scene(old_reference, [tmp_path / "a.trk"])
+    renderer = FakeRenderer(scene)
+    controller = TractFigureController(FakeServer(), renderer, tmp_path / "outputs")
+    original = controller.scene.image.model_copy(deep=True)
+
+    monkeypatch.setattr(app_module, "choose_image", lambda _current: new_reference)
+    monkeypatch.setattr(
+        renderer,
+        "set_slice_indices",
+        lambda *_indices: (_ for _ in ()).throw(RuntimeError("render failure")),
+    )
+    controller.change_image()
+
+    assert controller.scene.image == original
+    assert renderer.reference_loads == [old_reference]
+    assert "Image unchanged" in controller.state.status_message
+
+
+def test_runtime_tract_addition_deduplicates_folder_and_removal_updates_list(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference.nii.gz"
+    write_nifti(reference, (8, 9, 10))
+    existing = tmp_path / "a.trk"
+    existing.touch()
+    tract_folder = tmp_path / "tracts"
+    tract_folder.mkdir()
+    tck = tract_folder / "b.tck"
+    tinytrack = tract_folder / "c.tt.gz"
+    ignored = tract_folder / "notes.txt"
+    for path in (tck, tinytrack, ignored):
+        path.touch()
+
+    scene = make_scene(reference, [existing])
+    renderer = FakeRenderer(scene)
+    controller = TractFigureController(FakeServer(), renderer, tmp_path / "outputs")
+
+    controller.add_tract_entries([tck, tract_folder])
+
+    assert [tract.path for tract in controller.scene.tracts] == [
+        existing,
+        tck,
+        tinytrack,
+    ]
+    assert len(renderer.added_tracts) == 2
+    assert [item["name"] for item in controller.state.layer_items] == ["a", "b", "c.tt"]
+
+    controller.add_tract_entries([tract_folder])
+    assert len(controller.scene.tracts) == 3
+    assert "skipped 2 duplicates" in controller.state.status_message
+
+    removed_id = controller.scene.tracts[0].id
+    controller.remove_tract(removed_id)
+    assert renderer.removed_tracts == [removed_id]
+    assert [tract.path for tract in controller.scene.tracts] == [tck, tinytrack]
+    assert controller.scene.active_layer_id == controller.scene.tracts[0].id
+    assert [item["name"] for item in controller.state.layer_items] == ["b", "c.tt"]
+    assert [tract.path for tract in controller.initial_scene.tracts] == [tck, tinytrack]
 
 
 class FakeMorpher:
