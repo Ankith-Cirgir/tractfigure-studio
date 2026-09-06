@@ -58,6 +58,10 @@ class ImageLayerState(BaseModel):
     sagittal_index: int | None = Field(default=None, ge=0)
     coronal_index: int | None = Field(default=None, ge=0)
     axial_index: int | None = Field(default=None, ge=0)
+    # Manual registration, moving (native) RASMM -> fixed (displayed) RASMM, about the image centre.
+    translation_mm: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
 
 
 class MeshLayerState(BaseModel):

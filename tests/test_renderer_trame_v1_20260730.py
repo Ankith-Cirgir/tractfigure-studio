@@ -15,7 +15,7 @@ import pyvista as pv
 from nibabel.affines import apply_affine
 from PIL import Image
 
-from tractfigure.renderer_trame_v1_20260730 import SceneRenderer
+from tractfigure.renderer_trame_v1_20260730 import SceneRenderer, image_transform
 from tractfigure.scene_state_v1_20260730 import (
     CanvasState,
     ImageLayerState,
@@ -215,3 +215,20 @@ def test_renderer_loads_gifti_mesh_and_sets_opacity(tmp_path: Path) -> None:
         assert renderer.mesh_actor.GetShaderProperty().GetNumberOfShaderReplacements() == 0
     finally:
         renderer.close()
+
+
+def test_image_transform_is_identity_by_default_and_pivots_on_centre() -> None:
+    image = ImageLayerState(path=Path("ref.nii.gz"))
+    pivot = np.array([5.0, -3.0, 2.0])
+    np.testing.assert_allclose(image_transform(image, pivot), np.eye(4))
+
+    image.rotation_deg = (0.0, 0.0, 90.0)
+    image.scale = (2.0, 2.0, 2.0)
+    image.translation_mm = (1.0, 0.0, 0.0)
+    matrix = image_transform(image, pivot)
+    # The pivot only moves by the translation.
+    np.testing.assert_allclose(apply_affine(matrix, pivot), pivot + [1.0, 0.0, 0.0], atol=1e-12)
+    # A point 1 mm +x of the pivot ends up 2 mm +y of it (scaled, rotated 90 deg about z).
+    np.testing.assert_allclose(
+        apply_affine(matrix, pivot + [1.0, 0.0, 0.0]), pivot + [1.0, 2.0, 0.0], atol=1e-12
+    )

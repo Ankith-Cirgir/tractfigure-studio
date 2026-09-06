@@ -87,6 +87,21 @@ NUMERIC_CONTROL_CONFIG: dict[
     "active_tube_sides": (3.0, 24.0, True),
 }
 
+# (state prefix, ImageLayerState field, label, slider range, step)
+IMAGE_TRANSFORM_CONTROLS = (
+    ("image_translate", "translation_mm", "Translate (mm)", (-50.0, 50.0), 0.5),
+    ("image_rotate", "rotation_deg", "Rotate (deg)", (-30.0, 30.0), 1.0),
+    ("image_scale", "scale", "Scale", (0.5, 1.5), 0.01),
+)
+IMAGE_TRANSFORM_MODELS = {
+    f"{prefix}_{axis}": (field, index)
+    for prefix, field, _label, _limits, _step in IMAGE_TRANSFORM_CONTROLS
+    for index, axis in enumerate("xyz")
+}
+for _prefix, _field, _label, _limits, _step in IMAGE_TRANSFORM_CONTROLS:
+    for _axis in "xyz":
+        NUMERIC_CONTROL_CONFIG[f"{_prefix}_{_axis}"] = (*_limits, False)
+
 ACTIVE_NUMERIC_MODELS = (
     "active_line_width",
     "active_tube_radius",
@@ -345,6 +360,7 @@ class TractFigureController:
         self.state.sagittal_index = self.scene.image.sagittal_index
         self.state.coronal_index = self.scene.image.coronal_index
         self.state.axial_index = self.scene.image.axial_index
+        self._sync_image_transform_state()
 
         self.state.sagittal_max = image_shape[0] - 1
         self.state.coronal_max = image_shape[1] - 1
@@ -407,6 +423,9 @@ class TractFigureController:
             "axial_index",
         ):
             self.callbacks.append(self.state.change(key)(self._on_slice_indices))
+
+        for key in IMAGE_TRANSFORM_MODELS:
+            self.callbacks.append(self.state.change(key)(self._on_image_transform))
 
         for key, callback in (
             ("active_color", self._on_active_color),
@@ -587,6 +606,7 @@ class TractFigureController:
             self.state.sagittal_index = self.scene.image.sagittal_index
             self.state.coronal_index = self.scene.image.coronal_index
             self.state.axial_index = self.scene.image.axial_index
+            self._sync_image_transform_state()
             self.state.all_tracts_visible = all(tract.visible for tract in self.scene.tracts)
 
             for tract in self.scene.tracts:
@@ -1055,6 +1075,36 @@ class TractFigureController:
             return
 
         self.renderer.set_slice_indices(*indices)
+        self.update_view()
+
+    def _sync_image_transform_state(self) -> None:
+        for key, (field, index) in IMAGE_TRANSFORM_MODELS.items():
+            setattr(self.state, key, getattr(self.scene.image, field)[index])
+
+    def _on_image_transform(self, **_kwargs: Any) -> None:
+        if self._state_sync_in_progress:
+            return
+
+        values: dict[str, list[float]] = {}
+        for key, (field, index) in IMAGE_TRANSFORM_MODELS.items():
+            minimum, maximum, _integer = NUMERIC_CONTROL_CONFIG[key]
+            value = self._normalize_numeric_state(
+                key=key,
+                raw_value=getattr(self.state, key),
+                current_value=getattr(self.scene.image, field)[index],
+                minimum=minimum,
+                maximum=maximum,
+            )
+            if value is None:
+                return
+            values.setdefault(field, [0.0, 0.0, 0.0])[index] = float(value)
+
+        new = tuple(tuple(values[field]) for field in ("translation_mm", "rotation_deg", "scale"))
+        image = self.scene.image
+        if new == (image.translation_mm, image.rotation_deg, image.scale):
+            return
+
+        self.renderer.set_image_transform(*new)
         self.update_view()
 
     def _on_active_color(
@@ -1718,6 +1768,23 @@ def build_ui(
                     input_model="axial_index_input",
                     commit=ctrl.commit_axial_index_input,
                 )
+
+                v3.VDivider(classes="my-3")
+                v3.VCardTitle("Manual registration")
+
+                for prefix, field, label, (minimum, maximum), step in IMAGE_TRANSFORM_CONTROLS:
+                    for index, axis in enumerate("xyz"):
+                        model = f"{prefix}_{axis}"
+                        numeric_slider(
+                            label=f"{label} {axis.upper()}",
+                            model=model,
+                            value=getattr(controller.scene.image, field)[index],
+                            minimum=minimum,
+                            maximum=maximum,
+                            step=step,
+                            input_model=f"{model}_input",
+                            commit=getattr(ctrl, f"commit_{model}_input"),
+                        )
 
                 v3.VDivider(classes="my-3")
                 v3.VCardTitle("Tract layers")

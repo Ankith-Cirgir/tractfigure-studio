@@ -12,7 +12,9 @@ from typing import Any
 import nibabel as nib
 import numpy as np
 import pyvista as pv
+from nibabel.affines import apply_affine
 from PIL import Image, ImageOps
+from scipy.spatial.transform import Rotation
 
 from tractfigure.io import load_tract_layer
 from tractfigure.scene_state_v1_20260730 import (
@@ -54,6 +56,16 @@ OUTLINE_SHADER = """
   float s = 0.25 * pow(max(dot(reflect(l, n), vec3(0.0, 0.0, 1.0)), 0.0), 10.0);
   fragOutput0 = vec4(diffuseColor * (0.3 + 0.6 * max(dot(n, l), 0.0)) + s, opacity);
 """
+
+
+def image_transform(image_state: ImageLayerState, pivot: np.ndarray) -> np.ndarray:
+    """Manual registration matrix (moving RASMM -> fixed RASMM): T(t + p) Rx Ry Rz S T(-p)."""
+    linear = Rotation.from_euler("XYZ", image_state.rotation_deg, degrees=True).as_matrix()
+    linear = linear @ np.diag(image_state.scale)
+    matrix = np.eye(4)
+    matrix[:3, :3] = linear
+    matrix[:3, 3] = np.asarray(image_state.translation_mm) + pivot - linear @ pivot
+    return matrix
 
 
 def _safe_actor_name(prefix: str, identifier: str) -> str:
@@ -297,6 +309,7 @@ class SceneRenderer:
 
         self.reference_image = image
         self.image_shape = shape
+        self.image_center = apply_affine(image.affine, (np.asarray(shape) - 1) / 2)
 
         valid = data[np.isfinite(data)]
 
@@ -338,6 +351,28 @@ class SceneRenderer:
                 )
             )
             self.image_actors[slice_name] = actor
+
+        self._apply_image_transform()
+
+    def _apply_image_transform(self) -> None:
+        matrix = pv.vtkmatrix_from_array(
+            image_transform(self._require_scene().image, self.image_center)
+        )
+        for actor in self.image_actors.values():
+            actor.SetUserMatrix(matrix)
+
+    def set_image_transform(
+        self,
+        translation_mm: tuple[float, float, float],
+        rotation_deg: tuple[float, float, float],
+        scale: tuple[float, float, float],
+    ) -> None:
+        image = self._require_scene().image
+        image.translation_mm = translation_mm
+        image.rotation_deg = rotation_deg
+        image.scale = scale
+        self._apply_image_transform()
+        self._refresh()
 
     def _tube_geometry(
         self,
@@ -777,6 +812,9 @@ class SceneRenderer:
         scene.image.sagittal_index = initial_image.sagittal_index
         scene.image.coronal_index = initial_image.coronal_index
         scene.image.axial_index = initial_image.axial_index
+        scene.image.translation_mm = initial_image.translation_mm
+        scene.image.rotation_deg = initial_image.rotation_deg
+        scene.image.scale = initial_image.scale
 
         if initial_scene.mesh is None:
             scene.mesh = None
@@ -802,6 +840,7 @@ class SceneRenderer:
                     )
                 )
                 actor.GetProperty().SetOpacity(scene.image.opacity)
+            self._apply_image_transform()
 
         for initial_tract in initial_scene.tracts:
             tract = scene.tract_by_id(initial_tract.id)
