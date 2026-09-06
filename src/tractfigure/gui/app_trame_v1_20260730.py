@@ -413,6 +413,8 @@ class TractFigureController:
 
     def _register_controller_actions(self) -> None:
         self.ctrl.reset_camera = self.reset_camera
+        self.ctrl.show_all_layers = self.show_all_layers
+        self.ctrl.hide_all_layers = self.hide_all_layers
         self.ctrl.reset_active_tract_settings = self.reset_active_tract_settings
         self.ctrl.reset_all_settings = self.reset_all_settings
         self.ctrl.view_perspective = self.view_perspective
@@ -1138,6 +1140,14 @@ class TractFigureController:
         self._synchronize_camera_to_view()
         self.state.status_message = "Perspective view"
 
+    def show_all_layers(self) -> None:
+        self.state.all_tracts_visible = True
+        self.state.status_message = "All tracts shown"
+
+    def hide_all_layers(self) -> None:
+        self.state.all_tracts_visible = False
+        self.state.status_message = "All tracts hidden"
+
     def reset_camera(self) -> None:
         self.renderer.reset_camera()
         self._last_anatomical_plane = None
@@ -1576,6 +1586,27 @@ def build_ui(
                     hide_details=True,
                     density="compact",
                 )
+
+                with v3.VRow(
+                    classes="ma-0 mb-2",
+                    no_gutters=True,
+                ):
+                    with v3.VCol(classes="pa-0 pr-1"):
+                        v3.VBtn(
+                            "Show all",
+                            block=True,
+                            size="small",
+                            variant="tonal",
+                            click=ctrl.show_all_layers,
+                        )
+                    with v3.VCol(classes="pa-0 pl-1"):
+                        v3.VBtn(
+                            "Hide all",
+                            block=True,
+                            size="small",
+                            variant="tonal",
+                            click=ctrl.hide_all_layers,
+                        )
 
                 with v3.VSheet(
                     style="max-height: 400px; overflow-y: auto;",
