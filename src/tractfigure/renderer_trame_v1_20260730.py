@@ -230,6 +230,33 @@ class SceneRenderer:
         )
         self._apply_mesh_shader(mesh_state.shader)
 
+    def _remove_mesh_actor(self) -> None:
+        if self.mesh_actor is None:
+            return
+
+        self.plotter.remove_actor(
+            self.mesh_actor,
+            reset_camera=False,
+            render=False,
+        )
+        self.mesh_actor = None
+
+    def set_mesh_surface(self, mesh_path: str | Path) -> MeshLayerState:
+        """Swap the glass-brain geometry, retaining its color, opacity and shader."""
+
+        scene = self._require_scene()
+        mesh_path = Path(mesh_path).expanduser().resolve()
+
+        if scene.mesh is None:
+            scene.mesh = MeshLayerState(path=mesh_path)
+        else:
+            scene.mesh.path = mesh_path
+
+        # add_mesh reuses the "brain_mesh" name, so the previous actor is dropped.
+        self.load_mesh(scene.mesh)
+        self._refresh()
+        return scene.mesh
+
     def _apply_mesh_shader(self, shader: str) -> None:
         shader_property = self.mesh_actor.GetShaderProperty()
         shader_property.ClearAllFragmentShaderReplacements()
@@ -751,10 +778,18 @@ class SceneRenderer:
         scene.image.coronal_index = initial_image.coronal_index
         scene.image.axial_index = initial_image.axial_index
 
-        if initial_scene.mesh is not None:
+        if initial_scene.mesh is None:
+            scene.mesh = None
+            self._remove_mesh_actor()
+        else:
+            geometry_changed = scene.mesh is None or scene.mesh.path != initial_scene.mesh.path
             scene.mesh = initial_scene.mesh.model_copy(deep=True)
-            self.mesh_actor.GetProperty().SetOpacity(scene.mesh.opacity)
-            self._apply_mesh_shader(scene.mesh.shader)
+
+            if geometry_changed:
+                self.load_mesh(scene.mesh)
+            else:
+                self.mesh_actor.GetProperty().SetOpacity(scene.mesh.opacity)
+                self._apply_mesh_shader(scene.mesh.shader)
 
         if indices_changed:
             self.load_reference(scene.image)

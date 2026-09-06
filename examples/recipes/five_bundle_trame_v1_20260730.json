@@ -83,6 +83,7 @@
       "coordinate_report": {}
     }
   ],
+  "mesh": null,
   "active_layer_id": "cc-m-sub",
   "camera": null,
   "canvas": {

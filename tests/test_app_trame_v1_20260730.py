@@ -8,6 +8,7 @@ from typing import Any
 from PIL import Image
 
 from tractfigure.gui.app_trame_v1_20260730 import (
+    SURFACE_MORPH_LIMIT_MM,
     TractFigureController,
     color_with_alpha,
     load_recipe,
@@ -15,9 +16,11 @@ from tractfigure.gui.app_trame_v1_20260730 import (
     scene_from_inputs,
     split_color_and_alpha,
 )
+from tractfigure.morphology_niimath_v1_20260905 import NiimathError
 from tractfigure.scene_state_v1_20260730 import (
     CameraState,
     ImageLayerState,
+    MeshLayerState,
     SceneState,
     TractLayerState,
 )
@@ -63,6 +66,14 @@ class FakeRenderer:
 
     def set_line_width(self, layer_id: str, width: float) -> None:
         self.scene.tract_by_id(layer_id).line_width = width
+
+    def set_mesh_surface(self, mesh_path: Path) -> MeshLayerState:
+        if self.scene.mesh is None:
+            self.scene.mesh = MeshLayerState(path=mesh_path)
+        else:
+            self.scene.mesh.path = mesh_path
+
+        return self.scene.mesh
 
     def set_anatomical_view(self, plane: str, side: str) -> CameraState:
         self.view_calls.append((plane, side))
@@ -233,3 +244,66 @@ def test_controller_independent_controls_resets_and_outputs(tmp_path: Path) -> N
 
     with Image.open(io.BytesIO(controller.download_png())) as image:
         assert image.size == (1400, 1000)
+
+
+class FakeMorpher:
+    def __init__(self, tmp_path: Path) -> None:
+        self.directory = tmp_path / "surfaces"
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.requests: list[int] = []
+        self.error: Exception | None = None
+
+    def mesh_for_offset(self, millimeters: int) -> Path:
+        if self.error is not None:
+            raise self.error
+
+        self.requests.append(millimeters)
+        surface = self.directory / f"surface_{millimeters}.gii"
+        surface.touch()
+        return surface
+
+
+def test_erode_and_diffuse_track_a_signed_millimeter_offset(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.nii.gz"
+    scene = make_scene(reference, [tmp_path / "a.trk"])
+    renderer = FakeRenderer(scene)
+    controller = TractFigureController(
+        FakeServer(),
+        renderer,
+        tmp_path / "outputs",
+    )
+
+    morpher = FakeMorpher(tmp_path)
+    controller.surface_morpher = morpher
+
+    assert controller.state.surface_offset_mm == 0
+    assert controller.state.surface_offset_label == "Brain surface: unmodified"
+    assert not controller.state.mesh_present
+
+    controller.erode_surface()
+    controller.erode_surface()
+    controller.diffuse_surface()
+
+    assert morpher.requests == [1, 2, 1]
+    assert controller.state.surface_offset_mm == 1
+    assert controller.state.surface_offset_label == "Brain surface: eroded 1 mm"
+    assert controller.state.mesh_present
+    assert controller.scene.mesh is not None
+    assert controller.scene.mesh.path == morpher.directory / "surface_1.gii"
+
+    # Walk past the lower bound: the last press is refused rather than applied.
+    for _ in range(SURFACE_MORPH_LIMIT_MM + 2):
+        controller.diffuse_surface()
+
+    assert controller.state.surface_offset_mm == -SURFACE_MORPH_LIMIT_MM
+    assert "limited" in controller.state.status_message
+
+    morpher.error = NiimathError("niimath was not found")
+    controller.erode_surface()
+    assert controller.state.surface_offset_mm == -SURFACE_MORPH_LIMIT_MM
+    assert controller.state.status_message == "niimath was not found"
+
+    morpher.error = None
+    controller.reset_all_settings()
+    assert controller.state.surface_offset_mm == 0
+    assert not controller.state.mesh_present

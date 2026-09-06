@@ -46,3 +46,25 @@ python -m tractfigure.gui.app_trame_v1_20260730 \
 Data is committed in `demo_data/dsi/` (not fetched by `scripts/fetch_demo_data.py`);
 licenses in `DATA_LICENSES.md`. Validation steps: `PREHACKATHON_GUIDE.md`, section 13,
 "Validate the DSI Studio TinyTrack and glass-brain demo".
+
+## Erode and diffuse the brain surface
+
+The `+1mm Erode` and `-1mm Diffuse` buttons below the slice opacity slider
+regenerate the glass-brain surface from the reference volume with
+[niimath](https://github.com/rordenlab/niimath), which ships with the `viz`
+extra:
+
+```bash
+niimath <reference> -erode <isolevel> <mm> -mesh -i <isolevel> -b 1 <surface.gii>
+```
+
+Each press moves a signed millimeter counter by one and re-renders; positive
+offsets erode, negative offsets dilate, and the range is clamped to ±10 mm. Both
+morphology operators binarize at a threshold, so the threshold is pinned to the
+isosurface niimath extracts the unmodified volume at — a threshold below it
+would shave background voxels without moving the visible surface. That isolevel
+is probed once, and every generated surface is cached under
+`<output-dir>/surface_cache/`, so revisiting an offset is instant.
+
+Set `TRACTFIGURE_NIIMATH` to use a niimath executable that is not installed
+beside the interpreter or on `PATH`.
