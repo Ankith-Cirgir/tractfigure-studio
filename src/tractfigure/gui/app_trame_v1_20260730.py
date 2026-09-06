@@ -16,6 +16,7 @@ from pyvista.trame.ui.vuetify3 import checkbox as pv_checkbox
 from pyvista.trame.ui.vuetify3 import divider as pv_divider
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageWithDrawerLayout
+from trame.widgets import html
 from trame.widgets import vuetify3 as v3
 
 from tractfigure.morphology_niimath_v1_20260905 import (
@@ -323,6 +324,7 @@ class TractFigureController:
 
         self.visibility_keys: dict[str, str] = {}
         self.color_keys: dict[str, str] = {}
+        self.link_keys: dict[str, str] = {}
         self.callbacks: list[Any] = []
         self.numeric_commit_actions: dict[str, Any] = {}
         self._state_sync_in_progress = False
@@ -367,13 +369,17 @@ class TractFigureController:
         self.state.axial_max = image_shape[2] - 1
 
         self.state.all_tracts_visible = all(tract.visible for tract in self.scene.tracts)
+        self.state.layer_search_query = ""
+        self.state.linked_layer_ids = []
 
         for index, tract in enumerate(self.scene.tracts):
             visibility_key = f"layer_visible_{index}"
             color_key = f"layer_color_{index}"
+            link_key = f"layer_linked_{index}"
 
             self.visibility_keys[tract.id] = visibility_key
             self.color_keys[tract.id] = color_key
+            self.link_keys[tract.id] = link_key
 
             setattr(
                 self.state,
@@ -384,6 +390,11 @@ class TractFigureController:
                 self.state,
                 color_key,
                 tract.color,
+            )
+            setattr(
+                self.state,
+                link_key,
+                False,
             )
 
         self._refresh_layer_items()
@@ -456,8 +467,18 @@ class TractFigureController:
             )
             self.callbacks.append(self.state.change(key)(callback))
 
+        for tract in self.scene.tracts:
+            key = self.link_keys[tract.id]
+            callback = self._make_link_callback(
+                tract.id,
+                key,
+            )
+            self.callbacks.append(self.state.change(key)(callback))
+
     def _register_controller_actions(self) -> None:
         self.ctrl.reset_camera = self.reset_camera
+        self.ctrl.show_all_layers = self.show_all_layers
+        self.ctrl.hide_all_layers = self.hide_all_layers
         self.ctrl.reset_active_tract_settings = self.reset_active_tract_settings
         self.ctrl.reset_all_settings = self.reset_all_settings
         self.ctrl.view_perspective = self.view_perspective
@@ -494,12 +515,95 @@ class TractFigureController:
                 layer_id,
                 value,
             )
+            self._propagate_linked_visibility(layer_id, value)
 
             self.state.all_tracts_visible = all(item.visible for item in self.scene.tracts)
             self._refresh_layer_items()
             self.update_view()
 
         return callback
+
+    def _make_link_callback(
+        self,
+        layer_id: str,
+        state_key: str,
+    ):
+        def callback(**kwargs: Any) -> None:
+            if self._state_sync_in_progress:
+                return
+
+            linked = bool(kwargs.get(state_key))
+            linked_ids = list(self.state.linked_layer_ids or [])
+
+            if linked and layer_id not in linked_ids:
+                linked_ids.append(layer_id)
+            elif not linked and layer_id in linked_ids:
+                linked_ids.remove(layer_id)
+            else:
+                return
+
+            self.state.linked_layer_ids = linked_ids
+
+        return callback
+
+    def _propagate_linked_visibility(
+        self,
+        source_layer_id: str,
+        value: bool,
+    ) -> None:
+        linked_ids = self.state.linked_layer_ids or []
+
+        if source_layer_id not in linked_ids:
+            return
+
+        for other_id in linked_ids:
+            if other_id == source_layer_id:
+                continue
+
+            try:
+                other_tract = self.scene.tract_by_id(other_id)
+            except KeyError:
+                continue
+
+            if other_tract.visible == value:
+                continue
+
+            self.renderer.set_tract_visible(other_id, value)
+            setattr(
+                self.state,
+                self.visibility_keys[other_id],
+                value,
+            )
+
+    def _propagate_linked_appearance(
+        self,
+        source_layer_id: str,
+        color: str,
+        opacity: float,
+    ) -> None:
+        linked_ids = self.state.linked_layer_ids or []
+
+        if source_layer_id not in linked_ids:
+            return
+
+        for other_id in linked_ids:
+            if other_id == source_layer_id:
+                continue
+
+            try:
+                other_tract = self.scene.tract_by_id(other_id)
+            except KeyError:
+                continue
+
+            if other_tract.color == color and abs(other_tract.opacity - opacity) < 1e-9:
+                continue
+
+            self.renderer.set_tract_appearance(other_id, color, opacity)
+            setattr(
+                self.state,
+                self.color_keys[other_id],
+                other_tract.color,
+            )
 
     def _active_tract(self) -> TractLayerState | None:
         layer_id = self.state.active_layer_id
@@ -1145,6 +1249,7 @@ class TractFigureController:
             self.color_keys[tract.id],
             tract.color,
         )
+        self._propagate_linked_appearance(tract.id, color, target_opacity)
         self._refresh_layer_items()
         self.update_view()
 
@@ -1299,6 +1404,14 @@ class TractFigureController:
         self._last_anatomical_plane = None
         self._synchronize_camera_to_view()
         self.state.status_message = "Perspective view"
+
+    def show_all_layers(self) -> None:
+        self.state.all_tracts_visible = True
+        self.state.status_message = "All tracts shown"
+
+    def hide_all_layers(self) -> None:
+        self.state.all_tracts_visible = False
+        self.state.status_message = "All tracts hidden"
 
     def reset_camera(self) -> None:
         self.renderer.reset_camera()
@@ -1789,6 +1902,20 @@ def build_ui(
                 v3.VDivider(classes="my-3")
                 v3.VCardTitle("Tract layers")
 
+                v3.VTextField(
+                    label="Search layers",
+                    v_model=(
+                        "layer_search_query",
+                        controller.state.layer_search_query,
+                    ),
+                    prepend_inner_icon="mdi-magnify",
+                    clearable=True,
+                    hide_details=True,
+                    density="compact",
+                    variant="outlined",
+                    classes="mb-2",
+                )
+
                 v3.VSwitch(
                     label="All tracts",
                     v_model=(
@@ -1800,20 +1927,89 @@ def build_ui(
                     density="compact",
                 )
 
-                for tract in controller.scene.tracts:
-                    v3.VSwitch(
-                        label=tract.name,
-                        v_model=(
-                            controller.visibility_keys[tract.id],
-                            tract.visible,
-                        ),
-                        color=(
-                            controller.color_keys[tract.id],
-                            tract.color,
-                        ),
-                        hide_details=True,
-                        density="compact",
-                    )
+                with v3.VRow(
+                    classes="ma-0 mb-2",
+                    no_gutters=True,
+                ):
+                    with v3.VCol(classes="pa-0 pr-1"):
+                        v3.VBtn(
+                            "Show all",
+                            block=True,
+                            size="small",
+                            variant="tonal",
+                            click=ctrl.show_all_layers,
+                        )
+                    with v3.VCol(classes="pa-0 pl-1"):
+                        v3.VBtn(
+                            "Hide all",
+                            block=True,
+                            size="small",
+                            variant="tonal",
+                            click=ctrl.hide_all_layers,
+                        )
+
+                with v3.VSheet(
+                    style="max-height: 400px; overflow-y: auto;",
+                    classes="mb-2",
+                ):
+                    for tract in controller.scene.tracts:
+                        tract_name_js = tract.name.replace("\\", "\\\\").replace("'", "\\'")
+                        color_key = controller.color_keys[tract.id]
+
+                        with v3.VCard(
+                            variant="outlined",
+                            classes="mb-1",
+                            v_show=(
+                                f"!layer_search_query || '{tract_name_js}'.toLowerCase()"
+                                ".includes(layer_search_query.toLowerCase())"
+                            ),
+                        ):
+                            with v3.VRow(
+                                classes="ma-0 pa-1 align-center",
+                                no_gutters=True,
+                            ):
+                                with v3.VCol(cols="auto", classes="pa-0 pr-1"):
+                                    v3.VCheckbox(
+                                        v_model=(
+                                            controller.link_keys[tract.id],
+                                            False,
+                                        ),
+                                        hide_details=True,
+                                        density="compact",
+                                    )
+
+                                with v3.VCol(cols="auto", classes="pa-0"):
+                                    v3.VSwitch(
+                                        v_model=(
+                                            controller.visibility_keys[tract.id],
+                                            tract.visible,
+                                        ),
+                                        color=(
+                                            color_key,
+                                            tract.color,
+                                        ),
+                                        hide_details=True,
+                                        density="compact",
+                                    )
+
+                                with v3.VCol(classes="pa-0 pl-2", style="min-width: 0;"):
+                                    html.Span(
+                                        tract.name,
+                                        classes="text-caption text-truncate",
+                                        style=(
+                                            "display: block; white-space: nowrap; "
+                                            "overflow: hidden; text-overflow: ellipsis;"
+                                        ),
+                                    )
+
+                                with v3.VCol(cols="auto", classes="pa-0 pl-2"):
+                                    html.Div(
+                                        v_bind_style=(
+                                            f"'background-color: ' + {color_key} + "
+                                            "'; width: 14px; height: 14px; border-radius: 3px; "
+                                            "border: 1px solid rgba(0,0,0,0.2);'"
+                                        ),
+                                    )
 
                 v3.VSelect(
                     label="Active tract",
