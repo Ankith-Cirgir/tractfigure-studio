@@ -288,6 +288,7 @@ class TractFigureController:
 
         self.visibility_keys: dict[str, str] = {}
         self.color_keys: dict[str, str] = {}
+        self.link_keys: dict[str, str] = {}
         self.callbacks: list[Any] = []
         self.numeric_commit_actions: dict[str, Any] = {}
         self._state_sync_in_progress = False
@@ -329,13 +330,16 @@ class TractFigureController:
 
         self.state.all_tracts_visible = all(tract.visible for tract in self.scene.tracts)
         self.state.layer_search_query = ""
+        self.state.linked_layer_ids = []
 
         for index, tract in enumerate(self.scene.tracts):
             visibility_key = f"layer_visible_{index}"
             color_key = f"layer_color_{index}"
+            link_key = f"layer_linked_{index}"
 
             self.visibility_keys[tract.id] = visibility_key
             self.color_keys[tract.id] = color_key
+            self.link_keys[tract.id] = link_key
 
             setattr(
                 self.state,
@@ -346,6 +350,11 @@ class TractFigureController:
                 self.state,
                 color_key,
                 tract.color,
+            )
+            setattr(
+                self.state,
+                link_key,
+                False,
             )
 
         self._refresh_layer_items()
@@ -411,6 +420,14 @@ class TractFigureController:
             )
             self.callbacks.append(self.state.change(key)(callback))
 
+        for tract in self.scene.tracts:
+            key = self.link_keys[tract.id]
+            callback = self._make_link_callback(
+                tract.id,
+                key,
+            )
+            self.callbacks.append(self.state.change(key)(callback))
+
     def _register_controller_actions(self) -> None:
         self.ctrl.reset_camera = self.reset_camera
         self.ctrl.show_all_layers = self.show_all_layers
@@ -449,12 +466,95 @@ class TractFigureController:
                 layer_id,
                 value,
             )
+            self._propagate_linked_visibility(layer_id, value)
 
             self.state.all_tracts_visible = all(item.visible for item in self.scene.tracts)
             self._refresh_layer_items()
             self.update_view()
 
         return callback
+
+    def _make_link_callback(
+        self,
+        layer_id: str,
+        state_key: str,
+    ):
+        def callback(**kwargs: Any) -> None:
+            if self._state_sync_in_progress:
+                return
+
+            linked = bool(kwargs.get(state_key))
+            linked_ids = list(self.state.linked_layer_ids or [])
+
+            if linked and layer_id not in linked_ids:
+                linked_ids.append(layer_id)
+            elif not linked and layer_id in linked_ids:
+                linked_ids.remove(layer_id)
+            else:
+                return
+
+            self.state.linked_layer_ids = linked_ids
+
+        return callback
+
+    def _propagate_linked_visibility(
+        self,
+        source_layer_id: str,
+        value: bool,
+    ) -> None:
+        linked_ids = self.state.linked_layer_ids or []
+
+        if source_layer_id not in linked_ids:
+            return
+
+        for other_id in linked_ids:
+            if other_id == source_layer_id:
+                continue
+
+            try:
+                other_tract = self.scene.tract_by_id(other_id)
+            except KeyError:
+                continue
+
+            if other_tract.visible == value:
+                continue
+
+            self.renderer.set_tract_visible(other_id, value)
+            setattr(
+                self.state,
+                self.visibility_keys[other_id],
+                value,
+            )
+
+    def _propagate_linked_appearance(
+        self,
+        source_layer_id: str,
+        color: str,
+        opacity: float,
+    ) -> None:
+        linked_ids = self.state.linked_layer_ids or []
+
+        if source_layer_id not in linked_ids:
+            return
+
+        for other_id in linked_ids:
+            if other_id == source_layer_id:
+                continue
+
+            try:
+                other_tract = self.scene.tract_by_id(other_id)
+            except KeyError:
+                continue
+
+            if other_tract.color == color and abs(other_tract.opacity - opacity) < 1e-9:
+                continue
+
+            self.renderer.set_tract_appearance(other_id, color, opacity)
+            setattr(
+                self.state,
+                self.color_keys[other_id],
+                other_tract.color,
+            )
 
     def _active_tract(self) -> TractLayerState | None:
         layer_id = self.state.active_layer_id
@@ -985,6 +1085,7 @@ class TractFigureController:
             self.color_keys[tract.id],
             tract.color,
         )
+        self._propagate_linked_appearance(tract.id, color, target_opacity)
         self._refresh_layer_items()
         self.update_view()
 
@@ -1628,6 +1729,16 @@ def build_ui(
                                 classes="ma-0 pa-1 align-center",
                                 no_gutters=True,
                             ):
+                                with v3.VCol(cols="auto", classes="pa-0 pr-1"):
+                                    v3.VCheckbox(
+                                        v_model=(
+                                            controller.link_keys[tract.id],
+                                            False,
+                                        ),
+                                        hide_details=True,
+                                        density="compact",
+                                    )
+
                                 with v3.VCol(cols="auto", classes="pa-0"):
                                     v3.VSwitch(
                                         v_model=(
